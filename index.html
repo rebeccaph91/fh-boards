@@ -943,7 +943,7 @@ function renderClientPicker(){
   const set=CF_LIST.filter(c=>c.client_type===kind);if(!set.length)return;
   pickers.appendChild(el('h2',null,title));
   const row=el('div','pick');
-  set.forEach(c=>{const b=el('button','chip',c.display_name);b.onclick=()=>openClient(c,b,detail);row.appendChild(b);});
+  set.forEach(c=>{const b=el('button','chip',c.display_name+(c.pulled_at?'':' ·new'));b.onclick=()=>openClient(c,b,detail);row.appendChild(b);});
   pickers.appendChild(row);
  };
  mk('seller','Listings');mk('buyer','Buyers');
@@ -965,10 +965,10 @@ async function openClient(c,btn,detail){
  try{
   const row=await rpc('dash_client_file',{p_client:c.client_id});
   detail.textContent='';
-  if(!row||!row.workbook_md){detail.appendChild(el('div','err','No snapshot stored for '+c.display_name+' yet — it appears after the next 10 PM run.'));return;}
+  await cfNoteBox(c,detail);   // notes work even before the first snapshot exists
+  if(!row||!row.workbook_md){detail.appendChild(el('div','note','No snapshot of '+c.display_name+'’s workbook yet — the file view appears after the next 10 PM run. Notes you log above still reach the file.'));return;}
   const tables=parseTables(row.workbook_md);
   if(!tables.length){detail.appendChild(el('div','err','The snapshot exists but no tables could be parsed — tell Claude: "the mobile client-files parser needs updating".'));return;}
-  await cfNoteBox(c,detail);
   const isSeller=c.client_type==='seller';
   let profN=0;
   for(const t of tables){if(cfClassify(t)==='profile'){renderProfileKv(t,detail,profN===0?(isSeller?'Listing file':'Buyer profile'):null);profN++;}}
