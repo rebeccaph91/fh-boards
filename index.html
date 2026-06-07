@@ -647,7 +647,36 @@ function renderWorkshop(rows,flags){
  main.appendChild(el('p','sub','Skill bugs and issues, workshopped through the five lenses until each one is fixed AND prevented from recurring. Logged in the database; permanent.'));
  const tog=el('button','linkish',wsShowClosed?'Hide verified & closed':'Show verified & closed');
  tog.onclick=()=>{wsShowClosed=!wsShowClosed;renderWorkshop(rows,flags);};
- const tw=el('p');tw.style.margin='0 0 14px';tw.appendChild(tog);main.appendChild(tw);
+ const addBtn=el('button','linkish','＋ Flag an issue');
+ const tw=el('p');tw.style.margin='0 0 14px';tw.style.display='flex';tw.style.gap='14px';tw.appendChild(addBtn);tw.appendChild(tog);main.appendChild(tw);
+ // inline flag form — writes a skill_issues row (status open); the workshop ritual runs on desktop
+ const form=el('div','item');form.style.display='none';
+ form.appendChild(el('div','title','Flag a new issue'));
+ form.appendChild(el('p','sub','One line on what went wrong is enough — the full workshop happens with Claude on your computer.'));
+ const f1=el('div','field');f1.appendChild(el('label',null,'What happened? (required)'));
+ const ti=document.createElement('input');ti.type='text';ti.maxLength=200;f1.appendChild(ti);form.appendChild(f1);
+ const f2=el('div','field');f2.appendChild(el('label',null,'Details (optional — which client/listing, what you expected)'));
+ const di=document.createElement('textarea');di.rows=3;di.className='copybox';di.style.font='15px -apple-system,sans-serif';f2.appendChild(di);form.appendChild(f2);
+ const f3=el('div','field');f3.appendChild(el('label',null,'Severity'));
+ const sev=document.createElement('select');sev.style.cssText='width:100%;font-size:16px;padding:11px 12px;border:1px solid #d3d1c7;border-radius:10px;background:#fff;color:#1a1915;';
+ for(const s of ['low','medium','high','critical']){const o=document.createElement('option');o.value=s;o.textContent=s;if(s==='medium')o.selected=true;sev.appendChild(o);}
+ f3.appendChild(sev);form.appendChild(f3);
+ const fmsg=el('div','mutedtxt','');
+ const sub=el('button','primary','File it');
+ sub.style.marginTop='12px';
+ sub.onclick=async()=>{
+  fmsg.textContent='';
+  if(!ti.value.trim()){fmsg.textContent='Give it a one-line title first.';return;}
+  sub.disabled=true;sub.textContent='Filing…';
+  try{
+   await rpc('dash_issue_create',{p_title:ti.value,p_description:di.value||null,p_severity:sev.value});
+   ti.value='';di.value='';sev.value='medium';
+   loadWorkshop();
+  }catch(e){fmsg.textContent='Could not file it: '+e.message;sub.disabled=false;sub.textContent='File it';}
+ };
+ form.appendChild(sub);form.appendChild(fmsg);
+ main.appendChild(form);
+ addBtn.onclick=()=>{const open=form.style.display!=='none';form.style.display=open?'none':'block';addBtn.textContent=open?'＋ Flag an issue':'Cancel';if(!open)ti.focus();};
  flags=flags||[];
  if(flags.length){
   main.appendChild(el('h2',null,'Incoming flags — not yet workshopped'));
