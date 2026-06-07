@@ -883,6 +883,47 @@ function renderRaw(t,mount){
  t.rows.slice(0,40).forEach(r=>{const tr=el('tr');r.forEach(c=>tr.appendChild(el('td',null,c)));tb.appendChild(tr);});
  d.appendChild(tb);mount.appendChild(d);
 }
+// ---- "Tell Claude" broker notes (same broker_notes table as the desktop board; sweeps apply them) ----
+async function cfListNotes(c,card){
+ if(card._nl){card._nl.remove();card._nl=null;}
+ try{
+  const rows=await rpc('dash_broker_notes',{p_client:c.client_id,p_label:c.display_name});
+  if(!rows.length) return;
+  const nl=el('div');nl.style.marginTop='10px';
+  rows.forEach(r=>{
+   const d=el('div','quote',r.note);
+   const m=el('div','muted',(r.status==='pending'?'⏳ pending — applies on the next sweep':'✓ applied'+(r.applied_to?' to '+r.applied_to:''))+' · '+String(r.created_at).slice(0,16));
+   d.appendChild(m);nl.appendChild(d);
+  });
+  card.appendChild(nl);card._nl=nl;
+ }catch(e){}
+}
+async function cfNoteBox(c,mount){
+ const card=el('div','cfcard');card.style.borderStyle='dashed';
+ card.appendChild(el('div','addr','Tell Claude something about this client'));
+ card.appendChild(el('div','muted','Plain language, two uses: (1) facts that aren’t in any conversation — folded into Communications / the profile; (2) instructions — "add 188 Spadina Rd as a comp" or "add listing: 25 Strathearn Blvd" appends the row with full MLS data on the next sweep.'));
+ const ta=document.createElement('textarea');
+ ta.rows=2;ta.placeholder='e.g. "Bill said at the open house he’d sell both if he finds a condo first"  ·  "add comp: 188 Spadina Rd"';
+ ta.style.cssText='display:block;width:100%;box-sizing:border-box;margin-top:8px;font:16px -apple-system,sans-serif;padding:10px;border:1px solid #d3d1c7;border-radius:8px;background:#fff;color:#1a1915;';
+ card.appendChild(ta);
+ const b=el('button',null,'Log note');b.style.marginTop='8px';
+ const msg=el('span','muted','');msg.style.marginLeft='10px';
+ b.onclick=async()=>{
+  const t=ta.value.trim();
+  if(!t){msg.textContent='Type the note first.';return;}
+  if(t.length>4000){msg.textContent='Too long — keep it under 4000 characters.';return;}
+  b.disabled=true;msg.textContent='Saving…';
+  try{
+   await rpc('dash_broker_note_create',{p_kind:c.client_type,p_client:c.client_id,p_label:c.display_name,p_note:t});
+   ta.value='';msg.textContent='Saved ✓ — the next sweep applies it to the file.';
+   await cfListNotes(c,card);
+  }catch(e){msg.textContent='Save failed: '+String(e.message||'').slice(0,80);}
+  b.disabled=false;
+ };
+ card.appendChild(b);card.appendChild(msg);
+ await cfListNotes(c,card);
+ mount.appendChild(card);
+}
 let CF_LIST=[];
 async function loadClients(){
  const main=document.getElementById('v-clients');
@@ -927,6 +968,7 @@ async function openClient(c,btn,detail){
   if(!row||!row.workbook_md){detail.appendChild(el('div','err','No snapshot stored for '+c.display_name+' yet — it appears after the next 10 PM run.'));return;}
   const tables=parseTables(row.workbook_md);
   if(!tables.length){detail.appendChild(el('div','err','The snapshot exists but no tables could be parsed — tell Claude: "the mobile client-files parser needs updating".'));return;}
+  await cfNoteBox(c,detail);
   const isSeller=c.client_type==='seller';
   let profN=0;
   for(const t of tables){if(cfClassify(t)==='profile'){renderProfileKv(t,detail,profN===0?(isSeller?'Listing file':'Buyer profile'):null);profN++;}}
