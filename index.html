@@ -260,6 +260,45 @@ function parseItem(row){
  }
  it.text=stripBookkeeping(addrify(it.text));
  it.changes=it.changes.map(c=>addrify(c));
+ // Contract rule: summary is internal bookkeeping — NEVER shown when changes/draft exist and
+ // there is no client_news (it was leaking "sources fresh; rows=N; ..." onto the board).
+ if(it.structured&&!it.client_news&&(it.changes.length||it.draft)) it.text='';
+ // De-dupe the bullets themselves (producers occasionally write the same change twice).
+ it.changes=[...new Set(it.changes.map(c=>c.trim()))];
+ // Broker rules (2026-06-06): backfilled data is bookkeeping, not news; DOM ticking up is not news.
+ const DOMSEG=/^DOM( refreshed)?\s+\d+\s+to\s+\d+\.?$/i;
+ it.changes=it.changes
+  .filter(c=>!/backfill/i.test(c))
+  .map(c=>{
+   const i=c.indexOf(': ');
+   const pre=i<0?'':c.slice(0,i), body=(i<0?c:c.slice(i+2));
+   const segs=body.split(/;\s*/).filter(s=>!DOMSEG.test(s.trim()));
+   return segs.length?(pre?pre+': ':'')+segs.join('; '):'';
+  })
+  .filter(c=>c!=='')
+  // Broker rule (2026-06-06): "appended" reads as jargon — rephrase as a tracking confirmation.
+  .map(c=>{
+   const m=c.match(/^(.*?):\s*appended(?:,|\s|$)\s*(.*)$/i);
+   if(!m) return c;
+   const rest=m[2].replace(/^[,\s]+/,'').trim();
+   return 'Now tracking: '+m[1]+(rest?' — '+rest:'');
+  });
+ // De-dupe: client_news often restates the changes[] bullets in prose. Drop any client_news
+ // sentence whose every property reference already appears in a changes entry. References are
+ // reduced to civic number + street name ("163 wychwood") so Ave/Avenue and differing MLS#s
+ // still match the same property.
+ if(it.client_news&&it.changes.length&&it.text){
+  const ct=it.changes.join(' | ').toLowerCase();
+  const reduce=r=>{const m=String(r).toLowerCase().match(/^\d+[a-z]?\s+[\w.'-]+/);return m?m[0]:String(r).toLowerCase();};
+  it.text=it.text.split(/(?<=[.;])\s+/).filter(sn=>{
+   const mls=(sn.match(/[CWENX]\d{7,8}/gi)||[]).map(x=>x.toLowerCase());
+   const adr=(sn.match(/\d+[A-Za-z]?\s+[A-Z][\w.'-]+(?:\s+[A-Z][\w.'-]+)*(?:\s+(?:Rd|Road|St|Street|Ave|Avenue|Dr|Drive|Crt|Court|Cres|Crescent|Lane|Ln|Blvd|Way|Pkwy|Circle|Cir|Trail|Gate|Grove|Terrace|Sq|Pl|Place|Pt)\b)?/g)||[]).map(reduce)
+    .filter(r=>!/\s(dom|am|pm|hrs?|mins?|days?|beds?|baths?|sqft|showings?|offers?|comps?|views?|dollars?|k|m)$/i.test(r));
+   const refs=mls.concat(adr);
+   if(!refs.length) return true;                 // no property reference -> genuinely new prose, keep
+   return !refs.every(r=>ct.includes(r));        // every reference already in the bullets -> restatement, drop
+  }).join(' ').trim();
+ }
  return it;
 }
 function classify(it){
