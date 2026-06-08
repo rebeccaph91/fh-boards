@@ -1106,7 +1106,7 @@ function renderHealth(HEALTH_SKILLS,runs,pfs,schedOk,mirror,HB){
     due++;
     const quiet=hb.excluded_from_alarms===true;
     if(hb.last_run_status==='success'&&okAgeH<=sk.maxGapH){p=pill('g','ran clean');kindCol='#1d9e75';green++;body.appendChild(el('div','nt','Heartbeat: succeeded '+torTime(okAt)+(okAgeH>20?' ('+fmtDay(okAt)+')':'')));}
-    else if(hb.last_run_status&&hb.last_run_status!=='success'){p=pill(quiet?'a':'r',hb.last_run_status);kindCol=quiet?'#ef9f27':'#e24b4a';attention++;body.appendChild(el('div','nt','Heartbeat reports '+hb.last_run_status+(okAt?' — last clean run '+fmtDay(okAt)+' '+torTime(okAt):'')));}
+    else if(hb.last_run_status&&hb.last_run_status!=='success'){p=pill(quiet?'a':'r',hb.last_run_status);kindCol=quiet?'#ef9f27':'#e24b4a';if(!quiet)attention++;body.appendChild(el('div','nt','Heartbeat reports '+hb.last_run_status+(okAt?' — last clean run '+fmtDay(okAt)+' '+torTime(okAt):'')));}
     else if(okAt&&okAgeH>sk.maxGapH){if(quiet){p=pill('a','gap (expected)');kindCol='#ef9f27';body.appendChild(el('div','nt','Last clean heartbeat '+fmtDay(okAt)+' '+torTime(okAt)+' — gaps are expected for this task (Mac asleep)'));}else{p=pill('r','stalled');kindCol='#e24b4a';attention++;body.appendChild(el('div','nt','Last clean heartbeat '+fmtDay(okAt)+' '+torTime(okAt)+' — '+Math.round(okAgeH)+'h ago, beyond its ~'+Math.round(sk.maxGapH)+'h cadence'));}}
     else{p=pill('n','heartbeat incomplete');body.appendChild(el('div','nt','Heartbeat row exists but carries no status/timestamp yet — expecting a report on its next run'));}
    }else{
