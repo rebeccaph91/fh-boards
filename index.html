@@ -505,7 +505,7 @@ function fuCard(row,isOpen){
  c.appendChild(top);
  const who=row.buyer?row.buyer:(row.listing?row.listing:null);
  if(who) c.appendChild(el('div','who',who));
- c.appendChild(el('div','meta',(row.source_skill||'')+' · '+fmtDay(parseTs(row.created_at))+(isOpen?'':' · resolved')));
+ c.appendChild(el('div','meta',(row.source_skill||'')+' · '+fmtDay(parseTs(row.created_at))+' '+torTime(parseTs(row.created_at))+(isOpen?'':' · resolved')));
  renderPayload(c,row.payload);
  const acts=el('div','acts');
  if(isOpen){
@@ -563,17 +563,65 @@ function renderFollowups(open,resolved){
  setBanner(...renderFollowups._banner);
 }
 
-/* ============ Workshop port ============ */
-let wsShowClosed=false;
+/* ============ Workshop port (W14b: full desktop parity — lifecycle tabs + evidence) ============ */
 const SEVSTY={critical:['#fcebeb','#791f1f'],high:['#faeeda','#854f0b'],medium:['#eeedfe','#3c3489'],low:['#f1efe8','#5f5e5a']};
 const STATUSLBL={open:'open',workshopped:'workshopped',fix_staged:'fix staged',deployed:'deployed',verified:'verified',closed:'closed'};
+const WS_STAGES=[
+ ['flags','Flags','Incoming sys_ flags filed by skills — promote to an issue or dismiss.'],
+ ['open','Open','Captured, awaiting the five-lens workshop.'],
+ ['workshopped','Workshopped','Diagnosed; fix not yet staged.'],
+ ['fix_staged','Fix staged','Fix in source, waiting on the deploy click.'],
+ ['deployed','Deployed','Fix live; review rounds + close evidence accruing.'],
+ ['verified','Verified','Real-run evidence confirmed; close imminent.'],
+ ['closed','Closed','Done, evidence attached.']
+];
+let WS_CHECKS={};
 async function loadWorkshop(){
  const main=document.getElementById('v-workshop');
  main.textContent='';setBanner('loading…','n');
  try{
-  const [rows,flags]=await Promise.all([rpc('dash_skill_issues'),rpc('dash_pf_open',{p_category:'system',p_chars:300})]);
+  // evaluate due sql evidence checks server-side first (port of the desktop board's auto-eval)
+  await rpc('dash_evidence_eval').then(r=>r,()=>null);
+  const [rows,flags,checks]=await Promise.all([rpc('dash_skill_issues'),rpc('dash_pf_open',{p_category:'system',p_chars:300}),rpc('dash_evidence_checks').then(r=>r,()=>[])]);
+  WS_CHECKS={};
+  if(Array.isArray(checks))for(const c of checks){(WS_CHECKS[c.issue_id]=WS_CHECKS[c.issue_id]||[]).push(c);}
   renderWorkshop(rows,flags);
  }catch(e){errBox(main,'Could not load issues: '+e.message,loadWorkshop);}
+}
+function wsEvidenceBlock(row){
+ const list=WS_CHECKS[row.id]; if(!list||!list.length) return null;
+ const wrap=el('div','detail');
+ wrap.appendChild(el('div','dl','Close evidence ('+list.filter(c=>c.status==='passed').length+'/'+list.length+' verified)'));
+ const now=Date.now();
+ for(const c of list){
+  const line=el('div','dv');
+  const pill=el('span','pill');
+  const due=parseTs(c.due_at);
+  if(c.status==='passed'){pill.textContent='passed';pill.style.background='#e1f5ee';pill.style.color='#085041';}
+  else if(c.status==='failed'){pill.textContent='failed';pill.style.background='#fcebeb';pill.style.color='#791f1f';}
+  else if(due&&due.getTime()>now){pill.textContent='due '+fmtDay(due);pill.style.background='#f1efe8';pill.style.color='#5f5e5a';}
+  else{pill.textContent=(c.check_kind==='sql')?'checking…':'awaiting nightly check';pill.style.background='#faeeda';pill.style.color='#854f0b';}
+  pill.style.marginLeft='0';pill.style.marginRight='8px';
+  line.appendChild(pill);
+  line.appendChild(document.createTextNode(c.description+(c.last_result?' — '+c.last_result:'')));
+  wrap.appendChild(line);
+ }
+ if(row.status!=='closed'){
+  const all=list.every(c=>c.status==='passed')&&!!row.prevention&&(+row.review_rounds||0)>=3;
+  const anyFail=list.some(c=>c.status==='failed');
+  const acts=el('div','acts');
+  if(all){
+   const cb=el('button',null,'Copy "evidence verified — close" for Claude');
+   cb.onclick=()=>copyPrompt('All '+list.length+' close-evidence checks for skill issue "'+row.title+'" (skill_issues id '+row.id+') show passed in issue_evidence_checks. Re-verify the evidence rows yourself, then set status=closed (the DB close gate enforces prevention + 3 review rounds) and append an evidence_verified entry to review_log.',cb);
+   acts.appendChild(cb);
+  }else if(anyFail){
+   const ib=el('button',null,'Copy "evidence failed — investigate" for Claude');
+   ib.onclick=()=>copyPrompt('A close-evidence check failed for skill issue "'+row.title+'" (skill_issues id '+row.id+'). Read its issue_evidence_checks rows + any sys_evidence_check_failed followups, work out whether the fix needs more work or the check needs correcting, and proceed per the workshop ritual.',ib);
+   acts.appendChild(ib);
+  }
+  if(acts.children.length) wrap.appendChild(acts);
+ }
+ return wrap;
 }
 function wsCard(row){
  const c=el('div','item');
@@ -627,6 +675,7 @@ function wsCard(row){
  }
  if(acts.children.length) c.appendChild(acts);
  if(detail) c.appendChild(detail);
+ const ev=wsEvidenceBlock(row); if(ev) c.appendChild(ev);
  return c;
 }
 function wsFlagCard(p){
@@ -659,10 +708,8 @@ function renderWorkshop(rows,flags){
  const main=document.getElementById('v-workshop');
  main.textContent='';
  main.appendChild(el('p','sub','Skill bugs and issues, workshopped through the five lenses until each one is fixed AND prevented from recurring. Logged in the database; permanent.'));
- const tog=el('button','linkish',wsShowClosed?'Hide verified & closed':'Show verified & closed');
- tog.onclick=()=>{wsShowClosed=!wsShowClosed;renderWorkshop(rows,flags);};
  const addBtn=el('button','linkish','＋ Flag an issue');
- const tw=el('p');tw.style.margin='0 0 14px';tw.style.display='flex';tw.style.gap='14px';tw.appendChild(addBtn);tw.appendChild(tog);main.appendChild(tw);
+ const tw=el('p');tw.style.margin='0 0 14px';tw.style.display='flex';tw.style.gap='14px';tw.appendChild(addBtn);main.appendChild(tw);
  // inline flag form — writes a skill_issues row (status open); the workshop ritual runs on desktop
  const form=el('div','item');form.style.display='none';
  form.appendChild(el('div','title','Flag a new issue'));
@@ -692,23 +739,37 @@ function renderWorkshop(rows,flags){
  main.appendChild(form);
  addBtn.onclick=()=>{const open=form.style.display!=='none';form.style.display=open?'none':'block';addBtn.textContent=open?'＋ Flag an issue':'Cancel';if(!open)ti.focus();};
  flags=flags||[];
- if(flags.length){
-  main.appendChild(el('h2',null,'Incoming flags — not yet workshopped'));
-  for(const p of flags) main.appendChild(wsFlagCard(p));
+ // W14b lifecycle tabs — port of the desktop STAGES board (counts, hints, persistent
+ // choice, auto-select earliest stage with work, unknown statuses surface on Open).
+ const B={flags:flags};
+ for(const[k]of WS_STAGES)if(k!=='flags')B[k]=rows.filter(r=>r.status===k);
+ const known=new Set(WS_STAGES.map(([k])=>k));
+ B.open=B.open.concat(rows.filter(r=>!known.has(r.status)));  // safety net: unrecognised status is never invisible
+ let active=localStorage.getItem('fh-ws-tab');
+ if(!WS_STAGES.some(([k])=>k===active)) active=null;
+ if(!active) active=(WS_STAGES.find(([k])=>k!=='closed'&&B[k].length)||['closed'])[0];
+ const tabs=el('div');tabs.style.cssText='display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:2px 0 10px;';
+ for(const[k,label,hint]of WS_STAGES){
+  const t=el('button',null,label+' '+B[k].length);
+  t.title=hint;
+  t.style.cssText='flex:none;font-size:12px;padding:6px 12px;border-radius:999px;border:1px solid '+(k===active?'#1a1915':'#d3d1c7')+';background:'+(k===active?'#1a1915':'#fff')+';color:'+(k===active?'#fff':(B[k].length?'#1a1915':'#9a988f'))+';';
+  t.onclick=()=>{localStorage.setItem('fh-ws-tab',k);renderWorkshop(rows,flags);};
+  tabs.appendChild(t);
  }
- const open=rows.filter(r=>r.status==='open');
- const prog=rows.filter(r=>['workshopped','fix_staged','deployed'].indexOf(r.status)>=0);
- const done=rows.filter(r=>['verified','closed'].indexOf(r.status)>=0);
- if(open.length===0&&prog.length===0&&flags.length===0) main.appendChild(el('div','allcaught','No open issues — the workshop bench is clear.'));
- if(open.length){main.appendChild(el('h2',null,'Open'));for(const r of open) main.appendChild(wsCard(r));}
- if(prog.length){main.appendChild(el('h2',null,'In progress'));for(const r of prog) main.appendChild(wsCard(r));}
- if(wsShowClosed){
-  main.appendChild(el('h2',null,'Verified & closed'));
-  if(done.length===0) main.appendChild(el('p','sub','None yet.'));
-  for(const r of done) main.appendChild(wsCard(r));
+ main.appendChild(tabs);
+ const hint=WS_STAGES.find(([k])=>k===active);
+ main.appendChild(el('p','sub',hint[2]));
+ const cur=B[active];
+ if(cur.length===0){
+  main.appendChild(el('div','allcaught',active==='closed'?'Nothing closed yet.':'Nothing in this stage — '+(active==='flags'?'no unhandled flags.':'the bench is clear here.')));
+ }else if(active==='flags'){
+  for(const p of cur) main.appendChild(wsFlagCard(p));
+ }else{
+  for(const r of cur) main.appendChild(wsCard(r));
  }
- main.appendChild(el('p','sub','Source: the skill_issues table (live). Workshopping itself happens in Claude on your computer — the buttons here copy ready-made requests.'));
- renderWorkshop._banner=[(flags.length?flags.length+' flags · ':'')+open.length+' open · '+prog.length+' in progress · '+done.length+' closed',(open.length||flags.length)?'a':'g'];
+ main.appendChild(el('p','sub','Source: the skill_issues table (live). The ritual: capture → workshop (five lenses) → fix → prevent → three review rounds. No issue closes without prevention + reviews 3/3. Close evidence: sql checks re-verify on board open (server-side); github/file checks run in the nightly ~23:38 task. The action buttons copy ready-made requests for Claude.'));
+ const working=B.flags.length+B.open.length+B.workshopped.length+B.fix_staged.length+B.deployed.length+B.verified.length;
+ renderWorkshop._banner=[working?(working+' in flight · '+B.closed.length+' closed'):('all clear · '+B.closed.length+' closed'),working?'a':'g'];
  setBanner(...renderWorkshop._banner);
 }
 
@@ -1011,17 +1072,18 @@ const RUNS_PRODUCERS={'brokerbay-showings-sync':1,'pending-followups-digest':1,'
 const DIGESTS_ROW={id:'digests',label:'buyer-digest · seller-digest',due:'on demand',kind:'info',info:'No runs telemetry yet — Phase 1 adds logging so failures here become visible'};
 // fallback only if the schedule mirror is unreadable:
 const FALLBACK_HEALTH=[
- {id:'sheet-cleanup-1am',label:'sheet-cleanup-1am',due:'1:00 AM',kind:'info',info:'Tracked by scheduler fire times — mirror unavailable'},
+ {id:'sheet-cleanup-1am',label:'sheet-cleanup-1am',due:'1:00 AM',kind:'sched',maxGapH:26},
  {id:'brokerbay-showings-sync',label:'brokerbay-showings-sync',due:'every 2h · 8 AM–8 PM',kind:'multi',slots:[8,10,12,14,16,18,20]},
  {id:'pending-followups-digest',label:'pending-followups-digest',due:'2:50 PM',dueH:14.84,kind:'daily'},
  {id:'fireflies-sync',label:'fireflies-sync',due:'2:55 PM',dueH:14.92,kind:'daily'},
  {id:'conversation-sync',label:'conversation-sync',due:'3:00 PM',dueH:15,kind:'daily'},
- {id:'realm-keepalive',label:'realm-keepalive',due:'every 20 min',kind:'info',info:'Tracked by scheduler fire times — mirror unavailable'},
+ {id:'realm-keepalive',label:'realm-keepalive',due:'every 20 min',kind:'sched',maxGapH:1},
+ {id:'listtrac-keepalive',label:'listtrac-keepalive',due:'every 30 min',kind:'sched',maxGapH:1.5},
  {id:'realm-sync',label:'realm-sync',due:'4:30 PM',dueH:16.5,kind:'daily'},
  {id:'buyer-sweep',label:'buyer-sweep',due:'6:00 PM',dueH:18,kind:'daily'},
  {id:'seller-sweep',label:'seller-sweep',due:'7:00 PM',dueH:19,kind:'daily'},
  {id:'mobile-snapshot',label:'nightly-mobile-snapshot-22-00',due:'10:00 PM',dueH:22,kind:'daily'},
- {id:'github-backup-nightly',label:'github-backup-nightly',due:'11:00 PM',kind:'info',info:'Tracked by scheduler fire times — mirror unavailable'},
+ {id:'github-backup-nightly',label:'github-backup-nightly',due:'11:00 PM',kind:'sched',maxGapH:26},
  DIGESTS_ROW
 ];
 function fmtH(h){const hh=Math.floor(h),mm=Math.round((h-hh)*60);const h12=((hh+11)%12)+1;return h12+':'+String(mm).padStart(2,'0')+' '+(hh>=12?'PM':'AM');}
