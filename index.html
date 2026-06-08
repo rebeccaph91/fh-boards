@@ -228,7 +228,10 @@ document.getElementById('refresh').onclick=()=>{loaded[current]=true;LOADERS[cur
 
 /* ============ auth ============ */
 function showLogin(){document.getElementById('app').classList.add('hidden');document.getElementById('login').classList.remove('hidden');}
-function showApp(){document.getElementById('login').classList.add('hidden');document.getElementById('app').classList.remove('hidden');for(const k in loaded)delete loaded[k];show('updates');}
+function showApp(){document.getElementById('login').classList.add('hidden');document.getElementById('app').classList.remove('hidden');for(const k in loaded)delete loaded[k];
+ // W14: deep links from the retired Cowork pointer cards (#health/#updates/#followups/#workshop/#clients)
+ const h=(location.hash||'').replace('#','');
+ show(['updates','clients','followups','workshop','health'].includes(h)?h:'updates');}
 document.getElementById('signin').onclick=async()=>{
  const btn=document.getElementById('signin'),errb=document.getElementById('loginerr');
  errb.classList.add('hidden');btn.disabled=true;btn.textContent='Signing in…';
