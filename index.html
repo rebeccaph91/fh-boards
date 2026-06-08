@@ -514,6 +514,17 @@ function fuCard(row,isOpen){
    catch(e){rb.disabled=false;rb.textContent='✓ Resolve';}
   };
   acts.appendChild(rb);
+  // W14: broker reroute — one tap moves a misfiled skill bug to the workshop Flags tab
+  // (category -> system via dash_pf_to_workshop; payload stamped for routing-rule mining).
+  const wb=el('button',null,'⚒ Skill issue → Workshop');
+  wb.style.borderColor='#c9c4f2';wb.style.color='#3c3489';
+  wb.onclick=async()=>{
+   if(!UUID.test(row.id)) return;
+   wb.disabled=true;wb.textContent='Moving…';
+   try{await rpc('dash_pf_to_workshop',{p_id:row.id});loadFollowups();}
+   catch(e){wb.disabled=false;wb.textContent='⚒ Skill issue → Workshop';loadFollowups();}
+  };
+  acts.appendChild(wb);
   const hb=el('button',null,'Copy for Claude');
   hb.onclick=()=>copyPrompt('Help me resolve this open follow-up: '+(row.kind||'')+' from '+(row.source_skill||'')+(who?' for '+who:'')+'. Payload: '+String(row.payload||'').slice(0,300),hb);
   acts.appendChild(hb);
@@ -1049,13 +1060,16 @@ async function loadHealth(){
  const main=document.getElementById('v-health');
  main.textContent='';setBanner('loading…','n');
  try{
-  const [runs,pfs,sched]=await Promise.all([rpc('dash_runs_recent'),rpc('dash_pf_open',{p_chars:200}),rpc('dash_schedule').then(r=>r,()=>[])]);
+  const [runs,pfs,sched,hbRows]=await Promise.all([rpc('dash_runs_recent'),rpc('dash_pf_open',{p_chars:200}),rpc('dash_schedule').then(r=>r,()=>[]),rpc('dash_skill_health').then(r=>r,()=>[])]);
   let skills=FALLBACK_HEALTH,schedOk=false,mirror=null;
   if(Array.isArray(sched)&&sched.length){const b=buildSkills(sched);skills=b.skills;mirror=b.mirror;schedOk=true;}
-  renderHealth(skills,runs,pfs,schedOk,mirror);
+  // W14: heartbeats read LIVE via dash_skill_health (the one telemetry source that doesn't wait for the 10 PM mirror)
+  const HB={};if(Array.isArray(hbRows))for(const h of hbRows)HB[h.skill_name]=h;
+  renderHealth(skills,runs,pfs,schedOk,mirror,HB);
  }catch(e){errBox(main,'Could not load run data: '+e.message,loadHealth);}
 }
-function renderHealth(HEALTH_SKILLS,runs,pfs,schedOk,mirror){
+function renderHealth(HEALTH_SKILLS,runs,pfs,schedOk,mirror,HB){
+ HB=HB||{};
  const main=document.getElementById('v-health');
  main.textContent='';
  main.appendChild(el('p','sub',new Intl.DateTimeFormat('en-US',{timeZone:TZ,weekday:'long',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}).format(new Date())+' (Toronto) — pulled live from the runs table.'));
@@ -1080,7 +1094,19 @@ function renderHealth(HEALTH_SKILLS,runs,pfs,schedOk,mirror){
    body.appendChild(el('div','nt',sk.info));
    p=pill('n',sk.id==='digests'?'on demand':'not tracked');
   }else if(sk.kind==='sched'){
-   // No runs telemetry — judged from scheduler fire times AS OF the nightly 10 PM mirror
+   // W14 telemetry priority (ported from desktop): skill_health heartbeat (LIVE, written by the
+   // task itself at end-of-run) -> scheduler fire times AS OF the nightly 10 PM mirror -> honest gap.
+   const hb=HB[(sk.id||'').replace(/-(1am|nightly)$/,'')];
+   const okAt=hb&&hb.ok_at?parseTs(hb.ok_at):null;
+   const okAgeH=okAt?(Date.now()-okAt.getTime())/3600000:Infinity;
+   if(hb&&(okAt||hb.last_run_status)){
+    due++;
+    const quiet=hb.excluded_from_alarms===true;
+    if(hb.last_run_status==='success'&&okAgeH<=sk.maxGapH){p=pill('g','ran clean');kindCol='#1d9e75';green++;body.appendChild(el('div','nt','Heartbeat: succeeded '+torTime(okAt)+(okAgeH>20?' ('+fmtDay(okAt)+')':'')));}
+    else if(hb.last_run_status&&hb.last_run_status!=='success'){p=pill(quiet?'a':'r',hb.last_run_status);kindCol=quiet?'#ef9f27':'#e24b4a';attention++;body.appendChild(el('div','nt','Heartbeat reports '+hb.last_run_status+(okAt?' — last clean run '+fmtDay(okAt)+' '+torTime(okAt):'')));}
+    else if(okAt&&okAgeH>sk.maxGapH){if(quiet){p=pill('a','gap (expected)');kindCol='#ef9f27';body.appendChild(el('div','nt','Last clean heartbeat '+fmtDay(okAt)+' '+torTime(okAt)+' — gaps are expected for this task (Mac asleep)'));}else{p=pill('r','stalled');kindCol='#e24b4a';attention++;body.appendChild(el('div','nt','Last clean heartbeat '+fmtDay(okAt)+' '+torTime(okAt)+' — '+Math.round(okAgeH)+'h ago, beyond its ~'+Math.round(sk.maxGapH)+'h cadence'));}}
+    else{p=pill('n','heartbeat incomplete');body.appendChild(el('div','nt','Heartbeat row exists but carries no status/timestamp yet — expecting a report on its next run'));}
+   }else{
    const last=parseTs(sk.last), mir=parseTs(sk.mirror);
    const asof=mir?(fmtDay(mir)+' '+torTime(mir)):'last';
    const ageH=(last&&mir)?(mir.getTime()-last.getTime())/3600000:Infinity;
@@ -1088,6 +1114,7 @@ function renderHealth(HEALTH_SKILLS,runs,pfs,schedOk,mirror){
    if(!last){p=pill('a','never fired');kindCol='#ef9f27';attention++;body.appendChild(el('div','nt','Scheduler had no record of a run as of the '+asof+' mirror'));}
    else if(ageH<=sk.maxGapH){p=pill('g','fired');kindCol='#1d9e75';green++;body.appendChild(el('div','nt','Last fired '+fmtDay(last)+' '+torTime(last)+' (as of the '+asof+' mirror) — fired ≠ verified success'));}
    else{p=pill('r','stalled');kindCol='#e24b4a';attention++;body.appendChild(el('div','nt','Last fired '+fmtDay(last)+' '+torTime(last)+' — '+Math.round(ageH)+'h beyond cadence as of the '+asof+' mirror'));}
+   }
   }else{
    const mine=runs.filter(r=>r.skill_name===sk.id&&r._day===today);
    const prev=runs.filter(r=>r.skill_name===sk.id&&r._day!==today);
