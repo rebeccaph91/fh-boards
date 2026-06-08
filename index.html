@@ -278,7 +278,7 @@ function parseItem(row){
   .filter(c=>c!=='')
   // Broker rule (2026-06-06): "appended" reads as jargon — rephrase as a tracking confirmation.
   .map(c=>{
-   const m=c.match(/^(.*?):\s*appended(?:,|\s|$)\s*(.*)$/i);
+   const m=c.match(/^(.*?):\s*(?:appended|stub filled)(?:,|\s*[\u2014\u2013-]\s*|\s|$)\s*(.*)$/i);  // 2026-06-08: stub-filled = same jargon family as appended
    if(!m) return c;
    const rest=m[2].replace(/^[,\s]+/,'').trim();
    return 'Now tracking: '+m[1]+(rest?' — '+rest:'');
