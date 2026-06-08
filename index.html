@@ -272,7 +272,7 @@ function parseItem(row){
   .map(c=>{
    const i=c.indexOf(': ');
    const pre=i<0?'':c.slice(0,i), body=(i<0?c:c.slice(i+2));
-   const segs=body.split(/;\s*/).map(s=>s.replace(/^DOM( refreshed)?:?\s*\d+\s*(?:\u2192|->|\u2013|\u2014|to)\s*\d+\s*(?:,\s*|$)/i,'').trim()).filter(s=>s&&!DOMSEG.test(s));  // also strip a leading DOM-tick from mixed segments
+   const segs=body.split(/;\s*/).map(s=>s.replace(/^DOM( refreshed)?:?\s*\d+\s*(?:\u2192|->|\u2013|\u2014|to)\s*\d+\s*(?:,\s*|$)/i,'').replace(/,\s*DOM( refreshed)?:?\s*\d+\s*(?:\u2192|->|\u2013|\u2014|to)\s*\d+\.?\s*$/i,'').trim()).filter(s=>s&&!DOMSEG.test(s));  // also strip a leading DOM-tick from mixed segments
    return segs.length?(pre?pre+': ':'')+segs.join('; '):'';
   })
   .filter(c=>c!=='')
