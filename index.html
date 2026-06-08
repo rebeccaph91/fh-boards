@@ -266,13 +266,13 @@ function parseItem(row){
  // De-dupe the bullets themselves (producers occasionally write the same change twice).
  it.changes=[...new Set(it.changes.map(c=>c.trim()))];
  // Broker rules (2026-06-06): backfilled data is bookkeeping, not news; DOM ticking up is not news.
- const DOMSEG=/^DOM( refreshed)?\s+\d+\s+to\s+\d+\.?$/i;
+ const DOMSEG=/^DOM( refreshed)?:?\s*\d+\s*(?:\u2192|->|\u2013|\u2014|to)\s*\d+\.?$/i;  // 2026-06-08: producers drifted to "DOM 40\u219241" (arrow) — match all variants
  it.changes=it.changes
   .filter(c=>!/backfill/i.test(c))
   .map(c=>{
    const i=c.indexOf(': ');
    const pre=i<0?'':c.slice(0,i), body=(i<0?c:c.slice(i+2));
-   const segs=body.split(/;\s*/).filter(s=>!DOMSEG.test(s.trim()));
+   const segs=body.split(/;\s*/).map(s=>s.replace(/^DOM( refreshed)?:?\s*\d+\s*(?:\u2192|->|\u2013|\u2014|to)\s*\d+\s*(?:,\s*|$)/i,'').trim()).filter(s=>s&&!DOMSEG.test(s));  // also strip a leading DOM-tick from mixed segments
    return segs.length?(pre?pre+': ':'')+segs.join('; '):'';
   })
   .filter(c=>c!=='')
