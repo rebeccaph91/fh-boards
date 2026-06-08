@@ -271,7 +271,7 @@ function parseItem(row){
  // Broker rules (2026-06-06): backfilled data is bookkeeping, not news; DOM ticking up is not news.
  const DOMSEG=/^DOM( refreshed)?:?\s*\d+\s*(?:\u2192|->|\u2013|\u2014|to)\s*\d+\.?$/i;  // 2026-06-08: producers drifted to "DOM 40\u219241" (arrow) — match all variants
  it.changes=it.changes
-  .filter(c=>!/backfill/i.test(c))
+  .filter(c=>!/backfill|resolved by address match|provenance logged|address[- ]match \(chrome\)|mls#? re-?resolved/i.test(c))  // 2026-06-08: sheet-repair bullets are bookkeeping, not news
   .map(c=>{
    const i=c.indexOf(': ');
    const pre=i<0?'':c.slice(0,i), body=(i<0?c:c.slice(i+2));
