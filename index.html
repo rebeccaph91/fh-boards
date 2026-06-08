@@ -363,6 +363,8 @@ async function loadUpdates(){
  const main=document.getElementById('v-updates');
  main.textContent='';setBanner('loading…','n');
  try{
+  // W15: reported-state survives reloads within the session (DB has the flag; this is just button state)
+  try{Object.assign(CU_REPORTED,JSON.parse(sessionStorage.getItem('fh-cu-reported')||'{}'));}catch(e){}
   const [rows,dism]=await Promise.all([rpc('dash_sweep_runs'),rpc('dash_dismissals',{p_dashboard:'client-updates'})]);
   cuDISM={};for(const id of dism)cuDISM[id]=1;
   cuMLSADDR={};
@@ -455,6 +457,57 @@ function renderUpdates(rows){
     const cp=el('button',null,lbl);
     cp.onclick=()=>{navigator.clipboard.writeText(it.draft||it.text).then(()=>{cp.textContent='Copied';setTimeout(()=>cp.textContent=lbl,1200);}).catch(()=>{});};
     acts.appendChild(cp);
+   }
+   // W15: misattribution report (design-reviewed 2026-06-08). Tap "Wrong client" -> bullets
+   // become tappable (select the wrong ones, or none = whole update) + optional note ->
+   // Send files a workshop flag + a labeled_corrections training row via one atomic RPC.
+   if(UUID.test(it.id)&&!CU_REPORTED[it.id]){
+    const rep=el('button',null,'⚠ Wrong client');
+    rep.style.borderColor='#c9c4f2';rep.style.color='#3c3489';
+    let picking=false, noteTA=null, noteWrap=null, sendBtn=null, cancelBtn=null;
+    const bulletEls=[...box.querySelectorAll('.chg2 li')];
+    const exitPick=()=>{
+     picking=false;
+     for(const li of bulletEls){li.style.cssText='';li.onclick=null;delete li.dataset.repSel;}
+     if(noteWrap)noteWrap.remove();noteWrap=null;noteTA=null;
+     if(sendBtn)sendBtn.remove();sendBtn=null;
+     if(cancelBtn)cancelBtn.remove();cancelBtn=null;
+     rep.textContent='⚠ Wrong client';rep.disabled=false;
+    };
+    rep.onclick=()=>{
+     if(picking){exitPick();return;}
+     picking=true;rep.textContent='Cancel';
+     for(const li of bulletEls){
+      li.style.cursor='pointer';
+      li.onclick=()=>{
+       const on=li.dataset.repSel==='1';
+       li.dataset.repSel=on?'':'1';
+       li.style.background=on?'':'#fcebeb';li.style.textDecoration=on?'':'line-through';
+       li.style.borderRadius=on?'':'6px';
+      };
+     }
+     noteWrap=el('div','mutedtxt',bulletEls.length?'Tap the wrong line(s) — or tap none if the whole update is misattributed. Optional note:':'Optional note (e.g. whose it really is):');
+     noteTA=document.createElement('textarea');noteTA.rows=2;noteTA.className='copybox';noteTA.style.font='15px -apple-system,sans-serif';
+     noteWrap.appendChild(noteTA);
+     sendBtn=el('button',null,'Send report');
+     sendBtn.style.cssText='margin-top:6px;border-color:#c9c4f2;color:#3c3489;font-weight:600;';
+     sendBtn.onclick=async()=>{
+      sendBtn.disabled=true;sendBtn.textContent='Reporting…';
+      const idx=bulletEls.map((li,i)=>li.dataset.repSel==='1'?i:-1).filter(i=>i>=0);
+      try{
+       await rpc('dash_report_misattribution',{p_run:it.id,p_bullet_indices:idx,p_note:noteTA.value.trim()||null});
+       CU_REPORTED[it.id]=1;try{sessionStorage.setItem('fh-cu-reported',JSON.stringify(CU_REPORTED));}catch(e){}
+       exitPick();
+       rep.textContent='⚠ Reported ✓';rep.disabled=true;rep.style.borderColor='#9a988f';rep.style.color='#9a988f';
+      }catch(e){sendBtn.disabled=false;sendBtn.textContent='Send report (failed — retry)';}
+     };
+     box.appendChild(noteWrap);box.appendChild(sendBtn);
+    };
+    acts.appendChild(rep);
+   }else if(CU_REPORTED[it.id]){
+    const rep=el('button',null,'⚠ Reported ✓');
+    rep.disabled=true;rep.style.borderColor='#9a988f';rep.style.color='#9a988f';
+    acts.appendChild(rep);
    }
    box.appendChild(acts);
    if(draftBox) box.appendChild(draftBox);
@@ -563,6 +616,7 @@ function renderFollowups(open,resolved){
  setBanner(...renderFollowups._banner);
 }
 
+const CU_REPORTED={};
 /* ============ Workshop port (W14b: full desktop parity — lifecycle tabs + evidence) ============ */
 const SEVSTY={critical:['#fcebeb','#791f1f'],high:['#faeeda','#854f0b'],medium:['#eeedfe','#3c3489'],low:['#f1efe8','#5f5e5a']};
 const STATUSLBL={open:'open',workshopped:'workshopped',fix_staged:'fix staged',deployed:'deployed',verified:'verified',closed:'closed'};
