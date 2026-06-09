@@ -675,7 +675,10 @@ function renderFollowups(open,resolved){
   for(const row of resolved) main.appendChild(fuCard(row,false));
  }
  main.appendChild(el('p','sub','Source: the pending_followups table (live). Resolve writes the same state the desktop board and nightly digest read.'));
- renderFollowups._banner=open.length===0?['inbox zero','g']:[open.length+' open','a'];
+ // Count only rows where it is the broker's turn as "need you"; answered/working rows are on Claude's plate.
+ const fuNeeds=open.filter(r=>{const t=r.turn_state||'awaiting_broker';return t==='awaiting_broker'||t==='parked';}).length;
+ const fuAwait=open.length-fuNeeds;
+ renderFollowups._banner=open.length===0?['inbox zero','g']:(fuNeeds===0?[fuAwait+' awaiting Claude','g']:[fuNeeds+' need you'+(fuAwait?' · '+fuAwait+' awaiting Claude':''),'a']);
  setBanner(...renderFollowups._banner);
 }
 
@@ -1258,7 +1261,8 @@ function renderHealth(HEALTH_SKILLS,runs,pfs,schedOk,mirror,HB){
  const mirrorAgeH=mirror?(Date.now()-mirror.getTime())/3600000:null;
  if(schedOk&&mirrorAgeH!==null&&mirrorAgeH>26) main.appendChild(el('div','err','⚠ The schedule mirror is '+Math.round(mirrorAgeH)+'h old — the 10 PM snapshot task may not be running. Check its row below.'));
  const issues=pfs.filter(p=>p.category==='system');
- const decisions=pfs.length-issues.length;
+ // Decisions "waiting" = broker's turn only; rows answered (awaiting_claude) or in-flight (claude_working) are on Claude's plate.
+ const decisions=pfs.filter(p=>{if(p.category==='system')return false;const t=p.turn_state||'awaiting_broker';return t==='awaiting_broker'||t==='parked';}).length;
  const today=torDate(new Date()),nowH=torNowH();
  let green=0,due=0,attention=0;
  runs.forEach(r=>{r._d=parseTs(r.started_at);r._day=r._d?torDate(r._d):'';});
