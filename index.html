@@ -558,7 +558,7 @@ function fuCard(row,isOpen){
  c.appendChild(top);
  const who=row.buyer?row.buyer:(row.listing?row.listing:null);
  if(who) c.appendChild(el('div','who',who));
- c.appendChild(el('div','meta',(row.source_skill||'')+' · '+fmtDay(parseTs(row.created_at))+' '+torTime(parseTs(row.created_at))+(isOpen?'':' · resolved')));
+ c.appendChild(el('div','meta','#'+(row.id||'').slice(0,8)+' · '+(row.source_skill||'')+' · '+fmtDay(parseTs(row.created_at))+' '+torTime(parseTs(row.created_at))+(isOpen?'':' · resolved')));
  renderPayload(c,row.payload);
  const acts=el('div','acts');
  if(isOpen){
@@ -696,7 +696,7 @@ function wsCard(row){
   top.appendChild(rv);
  }
  c.appendChild(top);
- c.appendChild(el('div','meta','reported '+fmtDay(parseTs(row.created_at))+(row.closed_at?' · closed '+fmtDay(parseTs(row.closed_at)):'')));
+ c.appendChild(el('div','meta','#'+(row.id||'').slice(0,8)+' · reported '+fmtDay(parseTs(row.created_at))+(row.closed_at?' · closed '+fmtDay(parseTs(row.closed_at)):'')));
  if(row.skills){
   const sk=el('div');sk.style.marginTop='6px';
   for(const s of row.skills.split(', ')) if(s) sk.appendChild(el('span','sk',s));
@@ -741,7 +741,7 @@ function wsFlagCard(p){
  fp.style.background='#faeeda';fp.style.color='#854f0b';
  top.appendChild(fp);
  c.appendChild(top);
- c.appendChild(el('div','meta',(p.source_skill||'')+' · '+fmtDay(parseTs(p.created_at))));
+ c.appendChild(el('div','meta','#'+(p.id||'').slice(0,8)+' · '+(p.source_skill||'')+' · '+fmtDay(parseTs(p.created_at))));
  if(p.payload&&p.payload!=='null') c.appendChild(el('div','desc',p.payload));
  const acts=el('div','acts');
  const ob=el('button',null,'Copy "open as issue" for Claude');
