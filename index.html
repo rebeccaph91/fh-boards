@@ -112,6 +112,18 @@ table.raw td, table.raw th { border:1px solid #e6e4dc; padding:3px 8px; text-ali
 .primary:disabled { opacity:0.6; }
 #settings .item { padding:14px; }
 .copybox { display:block; width:100%; box-sizing:border-box; margin-top:6px; font:12px -apple-system,sans-serif; padding:8px; border:1px dashed #d3d1c7; border-radius:8px; background:#f6f5ef; color:#2c2c2a; }
+.fu-thread { margin-top:8px; display:flex; flex-direction:column; gap:6px; }
+.fu-bubble { font-size:13px; line-height:1.5; padding:8px 10px; border-radius:10px; max-width:92%; word-break:break-word; white-space:pre-wrap; }
+.fu-broker { align-self:flex-end; background:#eef6ff; border:1px solid #cfe2f7; color:#11324f; }
+.fu-claude { align-self:flex-start; background:#f6f5ef; border:1px solid #e6e4dc; color:#2c2c2a; }
+.fu-role { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; opacity:.6; margin-bottom:2px; }
+.fu-status { font-size:12px; font-weight:600; margin-top:8px; padding:6px 10px; border-radius:8px; display:inline-block; }
+.fu-status.await-claude { background:#e1f5ee; color:#085041; }
+.fu-status.working { background:#faeeda; color:#854f0b; }
+.fu-status.parked { background:#f1efe8; color:#5f5e5a; }
+.fu-answer { margin-top:8px; }
+.fu-answer textarea { width:100%; box-sizing:border-box; font:13px -apple-system,sans-serif; padding:8px; border:1px solid #d3d1c7; border-radius:8px; resize:vertical; }
+.fu-answer button { margin-top:6px; }
 .hidden { display:none !important; }
 </style>
 </head>
@@ -551,6 +563,41 @@ async function loadFollowups(){
   renderFollowups(open,resolved);
  }catch(e){errBox(main,'Could not load follow-ups: '+e.message,loadFollowups);}
 }
+// Internal payload keys that drive the thread/turn machinery — never shown as raw "key: value" rows.
+const FU_INTERNAL={thread:1,turn_state:1,claim_at:1,claim_run_id:1,broker_answer:1,broker_answered:1,broker_answered_at:1,broker_answered_by:1,rerouted_to_workshop:1,rerouted_at:1,rerouted_by:1,drain_state:1};
+function renderPayloadFields(box,o){
+ const dl=el('div','pay'); let any=false;
+ for(const k in o){ if(FU_INTERNAL[k])continue; let v=o[k]; if(v==null)continue; if(typeof v!=='string')v=JSON.stringify(v); dl.appendChild(el('div','payrow',k.replace(/_/g,' ')+': '+v)); any=true; }
+ if(any) box.appendChild(dl);
+}
+function renderThread(box,thread){
+ const t=el('div','fu-thread');
+ for(const turn of thread){
+  if(!turn||typeof turn!=='object')continue;
+  const b=el('div','fu-bubble '+(turn.role==='broker'?'fu-broker':'fu-claude'));
+  b.appendChild(el('div','fu-role',turn.role==='broker'?'You':'Claude'));
+  b.appendChild(el('div',null,String(turn.text==null?'':turn.text))); // textContent — client/broker text can't inject DOM
+  const ts=parseTs(turn.at); if(ts) b.appendChild(el('div','mutedtxt',fmtWhen(ts)));
+  t.appendChild(b);
+ }
+ box.appendChild(t);
+}
+function fuAnswerBox(row){
+ const wrap=el('div','fu-answer');
+ const ta=el('textarea'); ta.placeholder='Type your answer…'; ta.rows=2;
+ const send=el('button','res-btn','Send answer');
+ send.onclick=async()=>{
+  const val=ta.value.trim();
+  if(!UUID.test(row.id)||!val) return;
+  send.disabled=true; send.textContent='Sending…';
+  try{
+   const r=await rpc('dash_respond_followup',{p_id:row.id,p_answer:val});
+   if(r!==true) setBanner('Claude is replying right now — pull to refresh and try again.','a');
+   loadFollowups();
+  }catch(e){ send.disabled=false; send.textContent='Send answer'; setBanner('Could not send: '+e.message,'r'); }
+ };
+ wrap.appendChild(ta); wrap.appendChild(send); return wrap;
+}
 function fuCard(row,isOpen){
  const c=el('div','item');
  const top=el('div');
@@ -559,9 +606,25 @@ function fuCard(row,isOpen){
  const who=row.buyer?row.buyer:(row.listing?row.listing:null);
  if(who) c.appendChild(el('div','who',who));
  c.appendChild(el('div','meta','#'+(row.id||'').slice(0,8)+' · '+(row.source_skill||'')+' · '+fmtDay(parseTs(row.created_at))+' '+torTime(parseTs(row.created_at))+(isOpen?'':' · resolved')));
- renderPayload(c,row.payload);
+ // Parse payload exactly once; fail-safe to the legacy raw renderer so a malformed
+ // payload can never strand a row with no UI (dash_followups returns payload::text).
+ let pl=null, ok=true;
+ try{ pl=row.payload?JSON.parse(row.payload):{}; }catch(e){ ok=false; }
+ if(ok && pl && typeof pl==='object' && !Array.isArray(pl)){
+  renderPayloadFields(c,pl);
+  if(Array.isArray(pl.thread)&&pl.thread.length) renderThread(c,pl.thread);
+ }else{ renderPayload(c,row.payload); pl={}; }
+ const turn=row.turn_state||'awaiting_broker'; // turn_state column is the single source of truth
  const acts=el('div','acts');
  if(isOpen){
+  if(turn==='awaiting_claude'){
+   c.appendChild(el('div','fu-status await-claude','Answered ✓ — awaiting Claude'));
+  }else if(turn==='claude_working'){
+   c.appendChild(el('div','fu-status working','Claude is replying…'));
+  }else{
+   if(turn==='parked') c.appendChild(el('div','fu-status parked','Parked for a live session — add a note any time'));
+   c.appendChild(fuAnswerBox(row));
+  }
   const rb=el('button','res-btn','✓ Resolve');
   rb.onclick=async()=>{
    if(!UUID.test(row.id)) return;
@@ -600,7 +663,7 @@ function fuCard(row,isOpen){
 function renderFollowups(open,resolved){
  const main=document.getElementById('v-followups');
  main.textContent='';
- main.appendChild(el('p','sub','Decisions and questions that need you. Resolving here marks them resolved in the database (they leave the nightly digest too). Skill/system issues live on the Workshop and Health boards.'));
+ main.appendChild(el('p','sub','Decisions and questions that need you. Type an answer right on a card and Send — it is saved to the row and picked up by Claude (the card then shows “awaiting Claude”). Resolving marks it resolved in the database. Skill/system issues live on the Workshop and Health boards.'));
  const tog=el('button','linkish',fuShowResolved?'Hide recently resolved':'Show recently resolved');
  tog.onclick=()=>{fuShowResolved=!fuShowResolved;loadFollowups();};
  const tw=el('p');tw.style.margin='0 0 14px';tw.appendChild(tog);main.appendChild(tw);
