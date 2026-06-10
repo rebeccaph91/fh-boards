@@ -124,6 +124,16 @@ table.raw td, table.raw th { border:1px solid #e6e4dc; padding:3px 8px; text-ali
 .fu-answer { margin-top:8px; }
 .fu-answer textarea { width:100%; box-sizing:border-box; font:13px -apple-system,sans-serif; padding:8px; border:1px solid #d3d1c7; border-radius:8px; resize:vertical; }
 .fu-answer button { margin-top:6px; }
+/* To Review board (Phase C, c615b791) */
+.dispchip { font-size:11px; font-weight:700; padding:2px 9px; border-radius:999px; margin-left:8px; letter-spacing:0.03em; white-space:nowrap; }
+.disp-bug { background:#fcebeb; color:#791f1f; }
+.disp-noise { background:#eef0ff; color:#3c3489; }
+.disp-none { background:#f1efe8; color:#5f5e5a; }
+.warn-deploy { margin-top:10px; background:#fcebeb; border:1px solid #f3b9b9; color:#791f1f; border-radius:10px; padding:10px 12px; font-size:13px; font-weight:600; line-height:1.5; }
+.diffbox { display:block; width:100%; box-sizing:border-box; margin-top:8px; font:12px ui-monospace,Menlo,monospace; padding:10px 12px; border:1px solid #e6e4dc; border-radius:8px; background:#f6f5ef; color:#2c2c2a; white-space:pre-wrap; word-break:break-word; overflow-x:auto; }
+.rv-reason { margin-top:8px; }
+.rv-reason textarea { width:100%; box-sizing:border-box; font:13px -apple-system,sans-serif; padding:8px; border:1px solid #d3d1c7; border-radius:8px; resize:vertical; }
+.rv-reason button { margin-top:6px; }
 .hidden { display:none !important; }
 </style>
 </head>
@@ -150,6 +160,7 @@ table.raw td, table.raw th { border:1px solid #e6e4dc; padding:3px 8px; text-ali
     <div id="v-updates"></div>
     <div id="v-clients" class="hidden"></div>
     <div id="v-followups" class="hidden"></div>
+    <div id="v-review" class="hidden"></div>
     <div id="v-workshop" class="hidden"></div>
     <div id="v-health" class="hidden"></div>
     <div id="v-settings" class="hidden"></div>
@@ -158,6 +169,7 @@ table.raw td, table.raw th { border:1px solid #e6e4dc; padding:3px 8px; text-ali
     <button class="tab active" data-v="updates"><span class="ico">🏠</span>Updates</button>
     <button class="tab" data-v="clients"><span class="ico">📋</span>Clients</button>
     <button class="tab" data-v="followups"><span class="ico">✅</span>Follow-ups</button>
+    <button class="tab" data-v="review"><span class="ico">🔎</span>Review</button>
     <button class="tab" data-v="workshop"><span class="ico">🔧</span>Workshop</button>
     <button class="tab" data-v="health"><span class="ico">📈</span>Health</button>
   </div>
@@ -221,13 +233,13 @@ function errBox(box,msg,retry){
 }
 
 /* ============ navigation ============ */
-const TITLES={updates:'Client updates',clients:'Client files',followups:'Follow-ups',workshop:'Workshop',health:'Run health',settings:'Account'};
+const TITLES={updates:'Client updates',clients:'Client files',followups:'Follow-ups',review:'To Review',workshop:'Workshop',health:'Run health',settings:'Account'};
 let current='updates';
 const loaded={};
 function show(view){
  current=view;
  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.v===view));
- ['updates','clients','followups','workshop','health','settings'].forEach(v=>document.getElementById('v-'+v).classList.toggle('hidden',v!==view));
+ ['updates','clients','followups','review','workshop','health','settings'].forEach(v=>document.getElementById('v-'+v).classList.toggle('hidden',v!==view));
  document.getElementById('viewtitle').textContent=TITLES[view];
  setBanner('…','n');
  if(!loaded[view]){loaded[view]=true;LOADERS[view]();}
@@ -243,7 +255,7 @@ function showLogin(){document.getElementById('app').classList.add('hidden');docu
 function showApp(){document.getElementById('login').classList.add('hidden');document.getElementById('app').classList.remove('hidden');for(const k in loaded)delete loaded[k];
  // W14: deep links from the retired Cowork pointer cards (#health/#updates/#followups/#workshop/#clients)
  const h=(location.hash||'').replace('#','');
- show(['updates','clients','followups','workshop','health'].includes(h)?h:'updates');}
+ show(['updates','clients','followups','review','workshop','health'].includes(h)?h:'updates');}
 document.getElementById('signin').onclick=async()=>{
  const btn=document.getElementById('signin'),errb=document.getElementById('loginerr');
  errb.classList.add('hidden');btn.disabled=true;btn.textContent='Signing in…';
@@ -917,6 +929,161 @@ function renderWorkshop(rows,flags){
  setBanner(...renderWorkshop._banner);
 }
 
+/* ============ To Review board (Phase C, issue c615b791) — broker approves every runner fix ============ */
+/* Reads dash_review_queue() (every OPEN skill_issues row + any runner proposal). Buckets by the
+   LOCKED contract: To Review = review_state IN (NULL,pending_review,rejected); In Progress = approved
+   (still open — Approve never applies anything; the fix is applied later by an attended session).
+   Dismissed/closed rows leave the queue and live on the Workshop board's Done/Closed view.
+   All four actions go through the gated, SECURITY-DEFINER dash_* RPCs (state + provenance only).
+   Runner-authored proposal text is rendered with textContent only — it can never inject DOM. */
+const RV_STAGES=[
+ ['toreview','To Review','Every open flag with its runner proposal. Approve a fix, reject it back to the runner, or dismiss with a reason. Flags with no proposal show bare — dismiss or work them in Claude.'],
+ ['inprogress','In Progress','Approved — waiting for you to apply it in a live Claude session. Approving never applies anything on its own.']
+];
+function rvBucket(r){
+ if(r.status==='open'&&r.review_state==='approved') return 'inprogress';
+ if(r.status==='open'&&(r.review_state==null||r.review_state==='pending_review'||r.review_state==='rejected')) return 'toreview';
+ return null; // dismissed/closed/etc. are not returned by the queue; guard anyway
+}
+async function loadReview(){
+ const main=document.getElementById('v-review');
+ main.textContent='';setBanner('loading…','n');
+ try{ const rows=await rpc('dash_review_queue'); renderReview(rows); }
+ catch(e){ errBox(main,'Could not load the review queue: '+e.message,loadReview); }
+}
+function rvDispChip(disp){
+ const lbl=disp==='bug'?'BUG':disp==='noise'?'NOISE':disp==='no_fix'?'NO FIX':null;
+ if(!lbl) return null;
+ const cls=disp==='bug'?'disp-bug':disp==='noise'?'disp-noise':'disp-none';
+ return el('span','dispchip '+cls,lbl);
+}
+function rvProposal(c,row){
+ const p=row.runner_proposal; if(!p||typeof p!=='object') return;
+ if(p.classification_reason){ c.appendChild(el('div','dl','Runner’s read')); c.appendChild(el('div','dv',String(p.classification_reason))); }
+ const pc=p.proposed_change;
+ if(pc&&typeof pc==='object'){
+  const meta=[pc.surface_class,pc.target_file].filter(Boolean).join(' · ');
+  if(meta) c.appendChild(el('div','meta',meta));
+  let body=pc.diff;
+  if(!body&&(pc.old_text!=null||pc.new_text!=null)) body='- '+String(pc.old_text==null?'':pc.old_text)+'\n+ '+String(pc.new_text==null?'':pc.new_text);
+  if(body){ const box=el('div','diffbox'); box.textContent=String(body); c.appendChild(box); } // textContent — runner-authored content can't inject DOM
+ }
+ if(p.self_review&&typeof p.self_review==='object'){
+  const d=el('div','detail'); d.style.display='none';
+  for(const k in p.self_review){ let v=p.self_review[k]; if(v==null)continue; if(typeof v!=='string')v=JSON.stringify(v); d.appendChild(el('div','dl',k.replace(/_/g,' '))); d.appendChild(el('div','dv',v)); }
+  const tb=el('button',null,'Runner self-review');
+  tb.onclick=()=>{const open=d.style.display!=='none';d.style.display=open?'none':'block';tb.textContent=open?'Runner self-review':'Hide self-review';};
+  const a=el('div','acts'); a.appendChild(tb); c.appendChild(a); c.appendChild(d);
+ }
+}
+function rvDismissBox(row){
+ const wrap=el('div','rv-reason'); wrap.style.display='none';
+ const ta=el('textarea'); ta.placeholder='Why is this not a bug? (required — recorded on the row)'; ta.rows=2;
+ const go=el('button','res-btn','Confirm dismiss');
+ const msg=el('div','mutedtxt','');
+ go.onclick=async()=>{
+  const reason=ta.value.trim();
+  if(!UUID.test(row.id)) return;
+  if(!reason){ msg.textContent='A reason is required to dismiss.'; return; }
+  go.disabled=true; go.textContent='Dismissing…';
+  try{ await rpc('dash_dismiss_flag',{p_id:row.id,p_reason:reason}); loadReview(); }
+  catch(e){ go.disabled=false; go.textContent='Confirm dismiss'; msg.textContent='Could not dismiss: '+e.message; }
+ };
+ wrap.appendChild(ta); wrap.appendChild(go); wrap.appendChild(msg);
+ return wrap;
+}
+function rvClaudePrompt(row,bucket){
+ const t=(row.title||'').replace(/"/g,'');
+ const base='Work workshop issue '+(row.id||'')+' ("'+t+'") from the To Review board. ';
+ if(bucket==='inprogress'){
+  return base+'I approved its runner-proposed fix (review_state=approved, status still open). Apply it in this attended session per the workshop ritual: re-read runner_proposal on the skill_issues row, apply the change through the release machinery, run the W10 gate bound to THIS diff (keyed to run-id + diff-hash), write an audit-first record + a revertable commit (commit-with-issue-id), then advance and close via 5×3. The runner never applies — you do.';
+ }
+ return base+'Read its skill_issues row (title, runner_proposal: disposition / classification_reason / proposed_change / self_review). Decide with me whether to Approve, Reject, or Dismiss, then run the workshop ritual. If it is a deploy-class silencer, treat approving as intentionally stopping those alerts and confirm with me first.';
+}
+function reviewCard(row,bucket){
+ const c=el('div','item');
+ const dc=(row.deploy_class===true)||(row.runner_proposal&&row.runner_proposal.deploy_class===true);
+ const top=el('div');
+ top.appendChild(el('span','title',row.title));
+ const sev=el('span','pill',row.severity); const ss=SEVSTY[row.severity]||SEVSTY.low; sev.style.background=ss[0]; sev.style.color=ss[1]; top.appendChild(sev);
+ const chip=rvDispChip(row.disposition); if(chip) top.appendChild(chip);
+ if(row.review_state==='rejected'){ const rj=el('span','pill','rejected — runner retry'); rj.style.background='#faeeda'; rj.style.color='#854f0b'; top.appendChild(rj); }
+ if(bucket==='inprogress'){ const ap=el('span','pill','approved'); ap.style.background='#e1f5ee'; ap.style.color='#085041'; top.appendChild(ap); }
+ c.appendChild(top);
+ c.appendChild(el('div','meta','#'+(row.id||'').slice(0,8)+' · reported '+fmtDay(parseTs(row.created_at))));
+ if(Array.isArray(row.skills)&&row.skills.length){ const sk=el('div'); sk.style.marginTop='6px'; for(const s of row.skills) if(s) sk.appendChild(el('span','sk',s)); c.appendChild(sk); }
+ if(row.description) c.appendChild(el('div','desc',row.description));
+ // deploy-class silencer: loud, un-rubber-stampable warning (mirrors the contract guardrail)
+ if(dc) c.appendChild(el('div','warn-deploy','⚠ This silences these alerts. It edits detector / producer logic — approving means you intend to stop these warnings. Confirm only if that’s right.'));
+ // runner proposal (read + diff + self-review), or bare
+ if(row.has_proposal) rvProposal(c,row);
+ else c.appendChild(el('div','sub','No proposed fix — the runner couldn’t (or shouldn’t) author one. Dismiss with a reason, or work it in Claude.'));
+ const acts=el('div','acts');
+ const dismissBox=rvDismissBox(row);
+ // Mirror the server's has_proposal derivation (runner_proposal->'proposed_change' IS NOT NULL):
+ // never offer Approve/Reject on a row dash_approve_fix would reject (bare / no_fix / malformed).
+ const approvable=row.has_proposal&&row.runner_proposal&&row.runner_proposal.proposed_change!=null;
+ if(bucket==='toreview'&&approvable){
+  // Approve — deploy-class needs an explicit second tap that passes p_confirm_deploy_class=true
+  const ab=el('button','res-btn','Approve');
+  let armed=false;
+  ab.onclick=async()=>{
+   if(!UUID.test(row.id)) return;
+   if(dc&&!armed){ armed=true; ab.textContent='⚠ Confirm — silence these alerts'; ab.style.borderColor='#791f1f'; ab.style.color='#791f1f'; return; }
+   ab.disabled=true; ab.textContent='Approving…';
+   try{ await rpc('dash_approve_fix',{p_id:row.id,p_confirm_deploy_class:dc}); loadReview(); }
+   catch(e){ ab.disabled=false; ab.textContent=dc?'⚠ Confirm — silence these alerts':'Approve'; setBanner('Could not approve: '+e.message,'r'); }
+  };
+  acts.appendChild(ab);
+  const rb=el('button',null,'Reject');
+  rb.onclick=async()=>{
+   if(!UUID.test(row.id)) return;
+   rb.disabled=true; rb.textContent='Rejecting…';
+   try{ await rpc('dash_reject_fix',{p_id:row.id,p_note:null}); loadReview(); }
+   catch(e){ rb.disabled=false; rb.textContent='Reject'; setBanner('Could not reject: '+e.message,'r'); }
+  };
+  acts.appendChild(rb);
+ }
+ const xb=el('button',null,'Dismiss');
+ xb.onclick=()=>{ const open=dismissBox.style.display!=='none'; dismissBox.style.display=open?'none':'block'; xb.textContent=open?'Dismiss':'Cancel dismiss'; };
+ acts.appendChild(xb);
+ // Work in Claude — reuse the Follow-ups copy-for-Claude pattern (hands the ticket to an attended session)
+ const hb=el('button',null,'Work in Claude');
+ hb.style.borderColor='#9fe1cb'; hb.style.color='#085041';
+ hb.onclick=()=>copyPrompt(rvClaudePrompt(row,bucket),hb);
+ acts.appendChild(hb);
+ c.appendChild(acts);
+ c.appendChild(dismissBox);
+ return c;
+}
+function renderReview(rows){
+ const main=document.getElementById('v-review');
+ main.textContent='';
+ main.appendChild(el('p','sub','Every open flag, with the runner’s proposed fix when it has one. You are the approver: nothing the runner proposes is applied until you approve it and apply it in a live session. Approve a fix, reject it back to the runner, or dismiss with a reason — every dismissal is recorded.'));
+ rows=Array.isArray(rows)?rows:[];
+ const B={toreview:[],inprogress:[]};
+ for(const r of rows){ const b=rvBucket(r); if(b&&B[b]) B[b].push(r); }
+ let active=localStorage.getItem('fh-rv-tab');
+ if(!RV_STAGES.some(([k])=>k===active)) active=null;
+ if(!active) active=(RV_STAGES.find(([k])=>B[k].length)||['toreview'])[0];
+ const tabs=el('div'); tabs.style.cssText='display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:2px 0 10px;';
+ for(const[k,label,hint]of RV_STAGES){
+  const t=el('button',null,label+' '+B[k].length); t.title=hint;
+  t.style.cssText='flex:none;font-size:12px;padding:6px 12px;border-radius:999px;border:1px solid '+(k===active?'#1a1915':'#d3d1c7')+';background:'+(k===active?'#1a1915':'#fff')+';color:'+(k===active?'#fff':(B[k].length?'#1a1915':'#9a988f'))+';';
+  t.onclick=()=>{ localStorage.setItem('fh-rv-tab',k); renderReview(rows); };
+  tabs.appendChild(t);
+ }
+ main.appendChild(tabs);
+ const hint=RV_STAGES.find(([k])=>k===active);
+ main.appendChild(el('p','sub',hint[2]));
+ const cur=B[active];
+ if(cur.length===0) main.appendChild(el('div','allcaught',active==='toreview'?'Nothing to review — the runner has no proposals waiting and no bare flags are open.':'Nothing approved and waiting to apply.'));
+ else for(const r of cur) main.appendChild(reviewCard(r,active));
+ main.appendChild(el('p','sub','Source: dash_review_queue() (every open skill_issues row, live). Approve / Reject / Dismiss record state + provenance through gated RPCs; the fix is applied later by you in an attended session. Dismissed and closed items move to the Workshop board.'));
+ renderReview._banner=B.toreview.length?[B.toreview.length+' to review'+(B.inprogress.length?' · '+B.inprogress.length+' approved':''),'a']:(B.inprogress.length?[B.inprogress.length+' approved · apply in a session','a']:['nothing to review','g']);
+ setBanner(...renderReview._banner);
+}
+
 /* ============ Client files (W13 port — reads nightly snapshots) ============ */
 const STATC={'active':['#D9EAD3','#1d5a32'],'exclusive':['#E4D9F0','#4a3270'],'sold':['#F4CCCC','#7a1f1f'],'sold firm':['#F4CCCC','#7a1f1f'],'leased':['#F4CCCC','#7a1f1f'],'sold conditional':['#CFE2F3','#1f4e79'],'leased conditional':['#CFE2F3','#1f4e79'],'suspended':['#FFF2CC','#7a5c00'],'terminated':['#EFEFEF','#666'],'expired':['#EFEFEF','#666']};
 const norm=s=>String(s||'').trim().toLowerCase();
@@ -1420,11 +1587,12 @@ async function loadSettings(){
  main.appendChild(card3);
 }
 
-const LOADERS={updates:loadUpdates,clients:loadClients,followups:loadFollowups,workshop:loadWorkshop,health:loadHealth,settings:loadSettings};
+const LOADERS={updates:loadUpdates,clients:loadClients,followups:loadFollowups,review:loadReview,workshop:loadWorkshop,health:loadHealth,settings:loadSettings};
 const REBANNER={
  updates:()=>{if(renderUpdates._banner)setBanner(...renderUpdates._banner);},
  clients:()=>{if(renderClientPicker._banner)setBanner(...renderClientPicker._banner);},
  followups:()=>{if(renderFollowups._banner)setBanner(...renderFollowups._banner);},
+ review:()=>{if(renderReview._banner)setBanner(...renderReview._banner);},
  workshop:()=>{if(renderWorkshop._banner)setBanner(...renderWorkshop._banner);},
  health:()=>{if(renderHealth._banner)setBanner(...renderHealth._banner);},
  settings:()=>{}
