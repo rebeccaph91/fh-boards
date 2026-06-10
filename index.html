@@ -547,7 +547,6 @@ let fuShowResolved=false;
 // drain execute-tier status (w16c attended confirm-then-execute). execute_enabled is the
 // independent execute switch; in this build the execution engine is created but NOT granted,
 // so even when execute_enabled flips on, nothing runs until the separately-reviewed enable step.
-let DRAIN_EXEC={dry_run_enabled:false,execute_enabled:false};
 function renderPayload(box,ptxt){
  if(!ptxt||ptxt==='null') return;
  let o=null; try{o=JSON.parse(ptxt);}catch(e){}
@@ -562,7 +561,6 @@ async function loadFollowups(){
  main.textContent='';setBanner('loading…','n');
  try{
   const open=await rpc('dash_followups',{p_resolved:false});
-  try{ DRAIN_EXEC=await rpc('dash_drain_execute_status'); }catch(e){ DRAIN_EXEC={dry_run_enabled:false,execute_enabled:false}; }
   let resolved=[];
   if(fuShowResolved) resolved=await rpc('dash_followups',{p_resolved:true});
   renderFollowups(open,resolved);
@@ -616,76 +614,6 @@ function fuDrainSwitch(){
  const paint=(on)=>{ state.textContent=on?'ON':'OFF'; state.style.color=on?'#085041':'#791f1f'; btn.textContent=on?'Turn off':'Turn on'; btn.disabled=false;
   btn.onclick=async()=>{ btn.disabled=true; try{ const r=await rpc('dash_drain_toggle',{p_enabled:!on}); paint(r===true); }catch(e){ paint(on); setBanner('Could not change the auto-responder: '+e.message,'r'); } }; };
  rpc('dash_drain_status').then(r=>paint(r===true)).catch(()=>{ state.textContent='unknown'; btn.textContent='retry'; btn.disabled=false; btn.onclick=()=>loadFollowups(); });
- // Execute tier (w16c): read-only status in this build. The execution engine is built but
- // its grant is withheld, so this only reports the switch — it cannot run actions yet.
- const ex=el('div'); ex.style.marginTop='8px'; ex.style.fontSize='13px';
- const on=!!(DRAIN_EXEC&&DRAIN_EXEC.execute_enabled);
- ex.appendChild(el('span',null,'Execute approved actions: '));
- const exState=el('span',null,on?'ON':'OFF'); exState.style.fontWeight='600'; exState.style.color=on?'#085041':'#791f1f'; ex.appendChild(exState);
- box.appendChild(ex);
- box.appendChild(el('div','mutedtxt','Attended only: when on, an action you Approve and tap “Execute now” runs while you’re here — reversible sheet edits directly, client-facing actions only after you type CONFIRM. The execution engine ships disabled in this build (nothing runs yet).'));
- return box;
-}
-// w16c — render a structured dry-run proposal's Approve button (content-bound by hash).
-function fuApproveBtn(row,prop){
- const wrap=el('div'); wrap.style.margin='6px 0';
- const b=el('button','res-btn','✓ Approve this exact action');
- b.style.background='#085041'; b.style.color='#fff'; b.style.borderColor='#085041';
- b.onclick=async()=>{
-  if(!UUID.test(row.id)||!prop||!prop.hash||!prop.pid) return;
-  if(!confirm('Approve and freeze this action?\n\n'+(prop.text||'')+'\n\n('+(prop.tier==='irreversible_external'?'Client-facing — you will type CONFIRM before it runs.':'Reversible internal edit.')+')')) return;
-  b.disabled=true; b.textContent='Approving…';
-  try{ await rpc('dash_drain_approve',{p_id:row.id,p_pid:prop.pid,p_proposal_hash:prop.hash}); loadFollowups(); }
-  catch(e){ b.disabled=false; b.textContent='✓ Approve this exact action'; setBanner('Could not approve: '+e.message,'r'); }
- };
- wrap.appendChild(b);
- wrap.appendChild(el('div','mutedtxt','Approval is bound to this exact wording. If Claude revises the proposal, you’ll approve the new one.'));
- return wrap;
-}
-// w16c — Execute-now controls for an approved_pending_execution row.
-function fuExecuteControls(row,prop){
- const wrap=el('div'); wrap.style.margin='6px 0';
- const exec=!!(DRAIN_EXEC&&DRAIN_EXEC.execute_enabled);
- const irreversible=prop&&prop.tier==='irreversible_external';
- if(!exec){
-  wrap.appendChild(el('div','fu-status parked','Approved ✓ — execution is currently OFF. Turn on “Execute approved actions” to run it while you’re here.'));
-  return wrap;
- }
- let confirmInput=null;
- if(irreversible){
-  confirmInput=el('input'); confirmInput.placeholder='type CONFIRM'; confirmInput.style.marginRight='6px';
-  wrap.appendChild(el('div','mutedtxt','This is client-facing. Type CONFIRM, then Execute now.'));
-  wrap.appendChild(confirmInput);
- }
- const b=el('button','res-btn','▶ Execute now');
- b.onclick=async()=>{
-  if(!UUID.test(row.id)) return;
-  const conf=irreversible?(confirmInput&&confirmInput.value.trim()):null;
-  if(irreversible&&conf!=='CONFIRM'){ setBanner('Type CONFIRM to run a client-facing action.','a'); return; }
-  if(!prop||!prop.hash){ setBanner('This card is stale — pull to refresh.','a'); return; }
-  b.disabled=true; b.textContent='Executing…';
-  try{ await rpc('dash_drain_execute_now',{p_id:row.id,p_proposal_hash:prop.hash,p_confirm:conf}); setBanner('Execute requested — it will run only while the execution engine is enabled; otherwise it stays approved.','a'); loadFollowups(); }
-  catch(e){ b.disabled=false; b.textContent='▶ Execute now'; setBanner('Could not start execution: '+e.message,'r'); }
- };
- wrap.appendChild(b);
- return wrap;
-}
-// w16c — lazily fetch the ledger for a row and surface execution status + one-tap Undo.
-function fuLedgerSection(row){
- const box=el('div'); box.style.margin='4px 0';
- rpc('dash_drain_ledger',{p_id:row.id}).then(rows=>{
-  if(!Array.isArray(rows)||!rows.length) return;
-  const latest=rows[0];
-  const lbl={approved:'Approved — ready to execute',executing:'Executing…',executed:'Executed (verifying)',verified:'Executed & verified ✓',failed:'Execution failed',aborted:'Execution aborted — needs a live session',undone:'Reversed ↩'}[latest.status]||latest.status;
-  box.appendChild(el('div','mutedtxt',lbl+(latest.error?(' — '+latest.error):'')));
-  if(latest.can_undo){
-   const u=el('button',null,'↩ Undo this action'); u.style.borderColor='#c9c4f2'; u.style.color='#3c3489';
-   u.onclick=async()=>{ u.disabled=true; u.textContent='Undoing…';
-    try{ await rpc('dash_drain_undo',{p_ledger_id:latest.id}); loadFollowups(); }
-    catch(e){ u.disabled=false; u.textContent='↩ Undo this action'; setBanner('Could not undo: '+e.message,'r'); } };
-   box.appendChild(u);
-  }
- }).catch(()=>{});
  return box;
 }
 function fuCard(row,isOpen){
@@ -712,25 +640,11 @@ function fuCard(row,isOpen){
   }else if(turn==='claude_working'){
    c.appendChild(el('div','fu-status working','Claude is replying…'));
   }else{
-   // w16c — locate the latest structured dry-run proposal (carries action + content hash).
-   const props=(Array.isArray(pl.thread)?pl.thread:[]).filter(t=>t&&t.role==='claude'&&t.kind==='dry_run_proposal');
-   const lastProp=props.length?props[props.length-1]:null;
-   const structured=lastProp&&lastProp.action&&lastProp.hash&&lastProp.pid;
-   if(turn==='parked_proposal'){
-    c.appendChild(el('div','fu-status parked','Claude proposed an action (dry run — nothing was done yet). '+(structured?'Approve the exact action, or reply below.':'Confirm or reply below.')));
-    if(structured) c.appendChild(fuApproveBtn(row,lastProp));
-    c.appendChild(fuAnswerBox(row));
-   }else if(turn==='approved_pending_execution'){
-    c.appendChild(el('div','fu-status parked','Approved ✓ — ready to execute.'));
-    if(lastProp) c.appendChild(fuExecuteControls(row,lastProp));
-    c.appendChild(fuLedgerSection(row));
-    c.appendChild(fuAnswerBox(row));
-   }else{
-    if(turn==='parked_terminal') c.appendChild(el('div','fu-status parked','Needs a live session — add a note any time.'));
-    else if(turn==='parked') c.appendChild(el('div','fu-status parked','Parked for a live session — add a note any time.'));
-    c.appendChild(fuLedgerSection(row));
-    c.appendChild(fuAnswerBox(row));
-   }
+   if(turn==='parked_proposal') c.appendChild(el('div','fu-status parked','Claude proposed an action (dry run - nothing was done yet). Work it in a live session, or reply below.'));
+   else if(turn==='approved_pending_execution') c.appendChild(el('div','fu-status parked','Approved - work it in a live session.'));
+   else if(turn==='parked_terminal') c.appendChild(el('div','fu-status parked','Needs a live session - add a note any time.'));
+   else if(turn==='parked') c.appendChild(el('div','fu-status parked','Parked for a live session - add a note any time.'));
+   c.appendChild(fuAnswerBox(row));
   }
   const rb=el('button','res-btn','✓ Resolve');
   rb.onclick=async()=>{
