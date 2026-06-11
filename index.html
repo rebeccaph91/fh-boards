@@ -160,7 +160,6 @@ table.raw td, table.raw th { border:1px solid #e6e4dc; padding:3px 8px; text-ali
     <div id="v-updates"></div>
     <div id="v-clients" class="hidden"></div>
     <div id="v-followups" class="hidden"></div>
-    <div id="v-review" class="hidden"></div>
     <div id="v-workshop" class="hidden"></div>
     <div id="v-health" class="hidden"></div>
     <div id="v-settings" class="hidden"></div>
@@ -169,7 +168,6 @@ table.raw td, table.raw th { border:1px solid #e6e4dc; padding:3px 8px; text-ali
     <button class="tab active" data-v="updates"><span class="ico">🏠</span>Updates</button>
     <button class="tab" data-v="clients"><span class="ico">📋</span>Clients</button>
     <button class="tab" data-v="followups"><span class="ico">✅</span>Follow-ups</button>
-    <button class="tab" data-v="review"><span class="ico">🔎</span>Review</button>
     <button class="tab" data-v="workshop"><span class="ico">🔧</span>Workshop</button>
     <button class="tab" data-v="health"><span class="ico">📈</span>Health</button>
   </div>
@@ -233,13 +231,13 @@ function errBox(box,msg,retry){
 }
 
 /* ============ navigation ============ */
-const TITLES={updates:'Client updates',clients:'Client files',followups:'Follow-ups',review:'To Review',workshop:'Workshop',health:'Run health',settings:'Account'};
+const TITLES={updates:'Client updates',clients:'Client files',followups:'Follow-ups',workshop:'Workshop',health:'Run health',settings:'Account'};
 let current='updates';
 const loaded={};
 function show(view){
  current=view;
  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.v===view));
- ['updates','clients','followups','review','workshop','health','settings'].forEach(v=>document.getElementById('v-'+v).classList.toggle('hidden',v!==view));
+ ['updates','clients','followups','workshop','health','settings'].forEach(v=>document.getElementById('v-'+v).classList.toggle('hidden',v!==view));
  document.getElementById('viewtitle').textContent=TITLES[view];
  setBanner('…','n');
  if(!loaded[view]){loaded[view]=true;LOADERS[view]();}
@@ -255,7 +253,8 @@ function showLogin(){document.getElementById('app').classList.add('hidden');docu
 function showApp(){document.getElementById('login').classList.add('hidden');document.getElementById('app').classList.remove('hidden');for(const k in loaded)delete loaded[k];
  // W14: deep links from the retired Cowork pointer cards (#health/#updates/#followups/#workshop/#clients)
  const h=(location.hash||'').replace('#','');
- show(['updates','clients','followups','review','workshop','health'].includes(h)?h:'updates');}
+ // legacy #review deep-links land on the Workshop board (the standalone Review tab was absorbed)
+ show(['updates','clients','followups','workshop','health'].includes(h)?h:(h==='review'?'workshop':'updates'));}
 document.getElementById('signin').onclick=async()=>{
  const btn=document.getElementById('signin'),errb=document.getElementById('loginerr');
  errb.classList.add('hidden');btn.disabled=true;btn.textContent='Signing in…';
@@ -721,16 +720,44 @@ function renderFollowups(open,resolved){
 const CU_REPORTED={};
 /* ============ Workshop port (W14b: full desktop parity — lifecycle tabs + evidence) ============ */
 const SEVSTY={critical:['#fcebeb','#791f1f'],high:['#faeeda','#854f0b'],medium:['#eeedfe','#3c3489'],low:['#f1efe8','#5f5e5a']};
-const STATUSLBL={open:'open',workshopped:'workshopped',fix_staged:'fix staged',deployed:'deployed',verified:'verified',closed:'closed'};
+/* c615b791 FINAL board: ONE Workshop board, SIX tabs left->right = the journey.
+   The standalone Review tab (🔎) is absorbed here. Buckets are by skill_issues.status
+   (To review = open) except Flags, which are pre-ticket pending_followups (category=system).
+   The engineering "stage:" status chip is dropped — the tab IS the stage. */
 const WS_STAGES=[
- ['flags','Flags','Incoming sys_ flags filed by skills — promote to an issue or dismiss.'],
- ['open','Open','Captured, awaiting the five-lens workshop.'],
- ['workshopped','Workshopped','Diagnosed; fix not yet staged.'],
- ['fix_staged','Fix staged','Fix in source, waiting on the deploy click.'],
- ['deployed','Deployed','Fix live; review rounds + close evidence accruing.'],
- ['verified','Verified','Real-run evidence confirmed; close imminent.'],
- ['closed','Closed','Done, evidence attached.']
+ ['flags','Flags','Raw incoming system flags filed by skills, before they become tickets. The bridge promotes them to To review automatically every 2 hours — or tap “Run bridge now”.'],
+ ['toreview','To review','Open tickets to triage. Dismiss with a reason or work it in Claude; approve a proposed fix only when one has been authored.'],
+ ['inprogress','In progress','A session is actively working or applying the fix.'],
+ ['verifying','Verifying','Fix applied and the 5×3 review done — awaiting evidence. Tap “Confirm working”, or let a clean run prove it, to close.'],
+ ['closed','Closed','Done: reviewed, evidenced, and prevented from recurring.'],
+ ['dismissed','Dismissed','Looked at and set aside — each with a recorded reason.']
 ];
+// map a skill_issues row to its lifecycle bucket (Flags is sourced separately)
+function wsStatusBucket(s){
+ if(s==='open') return 'toreview';
+ if(s==='workshopped') return 'inprogress';
+ if(s==='fix_staged'||s==='deployed'||s==='verified') return 'verifying';
+ if(s==='closed') return 'closed';
+ if(s==='dismissed') return 'dismissed';
+ return 'toreview'; // safety net: an unrecognised status is never invisible
+}
+// "seen again ×N · last <date>" indicator (status-aware dedup)
+function wsRecurrencePill(row){
+ const n=+row.recurrence_count||0; if(n<=0) return null;
+ const last=row.last_seen_at?(' · last '+fmtDay(parseTs(row.last_seen_at))):'';
+ const p=el('span','pill','seen again ×'+n+last);
+ p.style.background='#faeeda';p.style.color='#854f0b';
+ return p;
+}
+// regression back-link ("regression of #<id> (closed <date>)")
+function wsRegressionLine(row){
+ const lk=row.links; if(!lk||typeof lk!=='object'||!lk.regression_of) return null;
+ const oid=String(lk.regression_of).slice(0,8);
+ const when=lk.regression_of_closed_at?(' (closed '+fmtDay(parseTs(lk.regression_of_closed_at))+')'):'';
+ const d=el('div','meta','↩ regression of #'+oid+when);
+ d.style.color='#791f1f';
+ return d;
+}
 let WS_CHECKS={};
 async function loadWorkshop(){
  const main=document.getElementById('v-workshop');
@@ -779,7 +806,11 @@ function wsEvidenceBlock(row){
  }
  return wrap;
 }
-function wsCard(row){
+/* Lifecycle card for In progress / Verifying / Closed / Dismissed buckets.
+   The "stage:" status chip is dropped (the tab is the stage). Adds the status-aware-dedup
+   recurrence indicator + regression back-link, Confirm-working on Verifying, Work-in-Claude
+   on In progress, and the dismissal reason on Dismissed. To review uses reviewCard, not this. */
+function wsCard(row,bucket){
  const c=el('div','item');
  const top=el('div');
  top.appendChild(el('span','title',row.title));
@@ -787,24 +818,28 @@ function wsCard(row){
  const ss=SEVSTY[row.severity]||SEVSTY.low;
  sev.style.background=ss[0];sev.style.color=ss[1];
  top.appendChild(sev);
- const st=el('span','pill',STATUSLBL[row.status]||row.status);
- st.style.background='#f1efe8';st.style.color='#5f5e5a';
- top.appendChild(st);
- if(row.status!=='open'){
-  const rr=+row.review_rounds||0;
-  const rv=el('span','pill','reviews '+rr+'/3');
-  if(rr>=3){rv.style.background='#e1f5ee';rv.style.color='#085041';}
-  else{rv.style.background='#faeeda';rv.style.color='#854f0b';}
-  top.appendChild(rv);
- }
+ const rr=+row.review_rounds||0;
+ const rv=el('span','pill','reviews '+rr+'/3');
+ if(rr>=3){rv.style.background='#e1f5ee';rv.style.color='#085041';}
+ else{rv.style.background='#faeeda';rv.style.color='#854f0b';}
+ top.appendChild(rv);
+ const rcp=wsRecurrencePill(row); if(rcp) top.appendChild(rcp);
  c.appendChild(top);
  c.appendChild(el('div','meta','#'+(row.id||'').slice(0,8)+' · reported '+fmtDay(parseTs(row.created_at))+(row.closed_at?' · closed '+fmtDay(parseTs(row.closed_at)):'')));
+ const reg=wsRegressionLine(row); if(reg) c.appendChild(reg);
  if(row.skills){
   const sk=el('div');sk.style.marginTop='6px';
-  for(const s of row.skills.split(', ')) if(s) sk.appendChild(el('span','sk',s));
+  for(const s of String(row.skills).split(', ').filter(Boolean)) sk.appendChild(el('span','sk',s));
   c.appendChild(sk);
  }
  if(row.description) c.appendChild(el('div','desc',row.description));
+ // dismissal reason (audit trail — "looked into all" stays provable)
+ if(bucket==='dismissed'){
+  const rd=row.review_decision; const reason=(rd&&typeof rd==='object'&&rd.reason)?String(rd.reason):null;
+  const rl=el('div','warn-deploy',reason?('Dismissed — reason: '+reason):'Dismissed (no reason recorded).');
+  rl.style.background='#f1efe8';rl.style.border='1px solid #e0ded4';rl.style.color='#5f5e5a';
+  c.appendChild(rl);
+ }
  const hasDetail=row.root_cause||row.fix||row.prevention||row.lens_ai_swe||row.lens_ml||row.lens_db||row.lens_github||row.lens_devops;
  let detail=null;
  const acts=el('div','acts');
@@ -817,17 +852,34 @@ function wsCard(row){
   db.onclick=()=>{const open=detail.style.display!=='none';detail.style.display=open?'none':'block';db.textContent=open?'Details':'Hide details';};
   acts.appendChild(db);
  }
- {
-  const rr=+row.review_rounds||0;
-  if(row.status==='open'){
-   const wb=el('button',null,'Copy "workshop this" for Claude');
-   wb.onclick=()=>copyPrompt('Run the skill-workshop ritual on the issue "'+row.title+'" (skill_issues id '+row.id+'): five-lens analysis, root cause, fix through the release machinery, prevention — then the triple review loop. Update the row as we go.',wb);
-   acts.appendChild(wb);
-  }else if(row.status!=='closed'&&rr<3){
+ if(bucket==='verifying'){
+  // one-tap manual evidence attestation -> Verifying closes (gate still enforces prevention + 5×3)
+  const cb=el('button','res-btn','✓ Confirm working');
+  const msg=el('div','mutedtxt','');
+  cb.onclick=async()=>{
+   if(!UUID.test(row.id)) return;
+   cb.disabled=true;cb.textContent='Confirming…';
+   try{
+    // atomic close: returns true on close, or throws the gate's own message if the 5×3 isn't done yet
+    await rpc('dash_confirm_working',{p_id:row.id});
+    loadWorkshop();
+   }catch(e){ cb.disabled=false; cb.textContent='✓ Confirm working'; msg.textContent='Could not close yet: '+e.message; }
+  };
+  acts.appendChild(cb);
+  if(rr<3){
    const rb=el('button',null,'Copy "review round '+(rr+1)+'" for Claude');
    rb.onclick=()=>copyPrompt('Run five-lens review round '+(rr+1)+' on the work done for skill issue "'+row.title+'" (skill_issues id '+row.id+'). Fix and add prevention for anything the review finds, log the round in review_log, and increment review_rounds.',rb);
    acts.appendChild(rb);
   }
+  const hb=el('button',null,'Work in Claude');
+  hb.style.borderColor='#9fe1cb';hb.style.color='#085041';
+  hb.onclick=()=>copyPrompt('Verify-and-close workshop issue '+row.id+' ("'+(row.title||'').replace(/"/g,'')+'") from the Verifying tab. The fix is applied; confirm a clean run (no re-trigger of the same flag/signature) is the evidence, complete the 5×3 if any rounds remain, then close — the DB close gate requires prevention + 5×3 + evidence (a passed clean-run check or your Confirm-working attestation).',hb);
+  acts.appendChild(hb);
+  c.appendChild(msg); // status line for the Confirm-working handler (empty until it has something to say)
+ }else if(bucket==='inprogress'){
+  const hb=el('button','res-btn','Work in Claude');
+  hb.onclick=()=>copyPrompt('Continue working workshop issue '+row.id+' ("'+(row.title||'').replace(/"/g,'')+'") from the In progress tab: apply the fix through the release machinery, run the W10 gate bound to this diff, then move it to Verifying. Run the 5×3 review as part of the same attended session.',hb);
+  acts.appendChild(hb);
  }
  if(acts.children.length) c.appendChild(acts);
  if(detail) c.appendChild(detail);
@@ -865,7 +917,14 @@ function renderWorkshop(rows,flags){
  main.textContent='';
  main.appendChild(el('p','sub','Skill bugs and issues, workshopped through the five lenses until each one is fixed AND prevented from recurring. Logged in the database; permanent.'));
  const addBtn=el('button','linkish','＋ Flag an issue');
- const tw=el('p');tw.style.margin='0 0 14px';tw.style.display='flex';tw.style.gap='14px';tw.appendChild(addBtn);main.appendChild(tw);
+ const bridgeBtn=el('button','linkish','↻ Run bridge now');
+ const bridgeMsg=el('span','mutedtxt','');
+ bridgeBtn.onclick=async()=>{
+  bridgeBtn.disabled=true;bridgeBtn.textContent='Running…';bridgeMsg.textContent='';
+  try{ const n=await rpc('dash_run_bridge'); bridgeMsg.textContent=(+n||0)+' flag'+((+n||0)===1?'':'s')+' promoted'; loadWorkshop(); }
+  catch(e){ bridgeBtn.disabled=false;bridgeBtn.textContent='↻ Run bridge now'; bridgeMsg.textContent='Could not run the bridge: '+e.message; }
+ };
+ const tw=el('p');tw.style.margin='0 0 14px';tw.style.display='flex';tw.style.gap='14px';tw.style.alignItems='center';tw.appendChild(addBtn);tw.appendChild(bridgeBtn);tw.appendChild(bridgeMsg);main.appendChild(tw);
  // inline flag form — writes a skill_issues row (status open); the workshop ritual runs on desktop
  const form=el('div','item');form.style.display='none';
  form.appendChild(el('div','title','Flag a new issue'));
@@ -895,15 +954,13 @@ function renderWorkshop(rows,flags){
  main.appendChild(form);
  addBtn.onclick=()=>{const open=form.style.display!=='none';form.style.display=open?'none':'block';addBtn.textContent=open?'＋ Flag an issue':'Cancel';if(!open)ti.focus();};
  flags=flags||[];
- // W14b lifecycle tabs — port of the desktop STAGES board (counts, hints, persistent
- // choice, auto-select earliest stage with work, unknown statuses surface on Open).
- const B={flags:flags};
- for(const[k]of WS_STAGES)if(k!=='flags')B[k]=rows.filter(r=>r.status===k);
- const known=new Set(WS_STAGES.map(([k])=>k));
- B.open=B.open.concat(rows.filter(r=>!known.has(r.status)));  // safety net: unrecognised status is never invisible
+ // c615b791 FINAL: SIX lifecycle tabs (Flags · To review · In progress · Verifying · Closed · Dismissed).
+ // Flags = pre-ticket pending_followups; the rest bucket by skill_issues.status via wsStatusBucket.
+ const B={flags:flags,toreview:[],inprogress:[],verifying:[],closed:[],dismissed:[]};
+ for(const r of rows){ (B[wsStatusBucket(r.status)]).push(r); }  // safety net: unknown status -> To review (never invisible)
  let active=localStorage.getItem('fh-ws-tab');
  if(!WS_STAGES.some(([k])=>k===active)) active=null;
- if(!active) active=(WS_STAGES.find(([k])=>k!=='closed'&&B[k].length)||['closed'])[0];
+ if(!active) active=(WS_STAGES.find(([k])=>k!=='closed'&&k!=='dismissed'&&B[k].length)||['toreview'])[0];
  const tabs=el('div');tabs.style.cssText='display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:2px 0 10px;';
  for(const[k,label,hint]of WS_STAGES){
   const t=el('button',null,label+' '+B[k].length);
@@ -916,41 +973,29 @@ function renderWorkshop(rows,flags){
  const hint=WS_STAGES.find(([k])=>k===active);
  main.appendChild(el('p','sub',hint[2]));
  const cur=B[active];
+ const EMPTY={flags:'No unhandled system flags.',toreview:'Nothing to triage — To review is clear.',inprogress:'Nothing being worked right now.',verifying:'Nothing awaiting evidence.',closed:'Nothing closed yet.',dismissed:'Nothing dismissed.'};
  if(cur.length===0){
-  main.appendChild(el('div','allcaught',active==='closed'?'Nothing closed yet.':'Nothing in this stage — '+(active==='flags'?'no unhandled flags.':'the bench is clear here.')));
+  main.appendChild(el('div','allcaught',EMPTY[active]||'Nothing here.'));
  }else if(active==='flags'){
   for(const p of cur) main.appendChild(wsFlagCard(p));
+ }else if(active==='toreview'){
+  for(const r of cur) main.appendChild(reviewCard(r,'toreview'));   // bare-or-proposal review card (Phase C, reused)
  }else{
-  for(const r of cur) main.appendChild(wsCard(r));
+  for(const r of cur) main.appendChild(wsCard(r,active));           // In progress / Verifying / Closed / Dismissed
  }
- main.appendChild(el('p','sub','Source: the skill_issues table (live). The ritual: capture → workshop (five lenses) → fix → prevent → three review rounds. No issue closes without prevention + reviews 3/3. Close evidence: sql checks re-verify on board open (server-side); github/file checks run in the nightly ~23:38 task. The action buttons copy ready-made requests for Claude.'));
- const working=B.flags.length+B.open.length+B.workshopped.length+B.fix_staged.length+B.deployed.length+B.verified.length;
+ main.appendChild(el('p','sub','Source: skill_issues + the system-flag bridge (live). Flags auto-promote to To review every 2h. Close needs prevention + the 5×3 review + evidence (a clean run, or your Confirm-working tap). Buttons copy ready-made requests for Claude.'));
+ const working=B.toreview.length+B.inprogress.length+B.verifying.length;
  renderWorkshop._banner=[working?(working+' in flight · '+B.closed.length+' closed'):('all clear · '+B.closed.length+' closed'),working?'a':'g'];
  setBanner(...renderWorkshop._banner);
 }
 
-/* ============ To Review board (Phase C, issue c615b791) — broker approves every runner fix ============ */
-/* Reads dash_review_queue() (every OPEN skill_issues row + any runner proposal). Buckets by the
-   LOCKED contract: To Review = review_state IN (NULL,pending_review,rejected); In Progress = approved
-   (still open — Approve never applies anything; the fix is applied later by an attended session).
-   Dismissed/closed rows leave the queue and live on the Workshop board's Done/Closed view.
-   All four actions go through the gated, SECURITY-DEFINER dash_* RPCs (state + provenance only).
-   Runner-authored proposal text is rendered with textContent only — it can never inject DOM. */
-const RV_STAGES=[
- ['toreview','To Review','Every open flag with its runner proposal. Approve a fix, reject it back to the runner, or dismiss with a reason. Flags with no proposal show bare — dismiss or work them in Claude.'],
- ['inprogress','In Progress','Approved — waiting for you to apply it in a live Claude session. Approving never applies anything on its own.']
-];
-function rvBucket(r){
- if(r.status==='open'&&r.review_state==='approved') return 'inprogress';
- if(r.status==='open'&&(r.review_state==null||r.review_state==='pending_review'||r.review_state==='rejected')) return 'toreview';
- return null; // dismissed/closed/etc. are not returned by the queue; guard anyway
-}
-async function loadReview(){
- const main=document.getElementById('v-review');
- main.textContent='';setBanner('loading…','n');
- try{ const rows=await rpc('dash_review_queue'); renderReview(rows); }
- catch(e){ errBox(main,'Could not load the review queue: '+e.message,loadReview); }
-}
+/* ============ Review card + helpers (Phase C of c615b791) — reused by the Workshop "To review" tab ============ */
+/* c615b791 FINAL absorbed the standalone Review tab into the Workshop board: there is no
+   longer a separate Review view, loadReview, or dash_review_queue call. renderWorkshop feeds
+   the To review bucket (status='open' rows from dash_skill_issues) straight into reviewCard().
+   Every action still goes through the gated, SECURITY-DEFINER dash_* RPCs (state + provenance
+   only — the tab applies nothing). Runner-authored proposal text renders via textContent only,
+   so it can never inject DOM. Refreshes reload the Workshop board (loadWorkshop). */
 function rvDispChip(disp){
  const lbl=disp==='bug'?'BUG':disp==='noise'?'NOISE':disp==='no_fix'?'NO FIX':null;
  if(!lbl) return null;
@@ -986,7 +1031,7 @@ function rvDismissBox(row){
   if(!UUID.test(row.id)) return;
   if(!reason){ msg.textContent='A reason is required to dismiss.'; return; }
   go.disabled=true; go.textContent='Dismissing…';
-  try{ await rpc('dash_dismiss_flag',{p_id:row.id,p_reason:reason}); loadReview(); }
+  try{ await rpc('dash_dismiss_flag',{p_id:row.id,p_reason:reason}); loadWorkshop(); }
   catch(e){ go.disabled=false; go.textContent='Confirm dismiss'; msg.textContent='Could not dismiss: '+e.message; }
  };
  wrap.appendChild(ta); wrap.appendChild(go); wrap.appendChild(msg);
@@ -1002,27 +1047,33 @@ function rvClaudePrompt(row,bucket){
 }
 function reviewCard(row,bucket){
  const c=el('div','item');
- const dc=(row.deploy_class===true)||(row.runner_proposal&&row.runner_proposal.deploy_class===true);
+ const prop=(row.runner_proposal&&typeof row.runner_proposal==='object')?row.runner_proposal:null;
+ // derive has_proposal client-side (dash_skill_issues doesn't return the server's derived boolean):
+ // mirror dash_review_queue / dash_approve_fix — proposed_change must be present.
+ const hasProp=(row.has_proposal!=null)?!!row.has_proposal:!!(prop&&prop.proposed_change!=null);
+ const dc=(row.deploy_class===true)||(prop&&prop.deploy_class===true);
  const top=el('div');
  top.appendChild(el('span','title',row.title));
  const sev=el('span','pill',row.severity); const ss=SEVSTY[row.severity]||SEVSTY.low; sev.style.background=ss[0]; sev.style.color=ss[1]; top.appendChild(sev);
  const chip=rvDispChip(row.disposition); if(chip) top.appendChild(chip);
+ const rcp=wsRecurrencePill(row); if(rcp) top.appendChild(rcp);
  if(row.review_state==='rejected'){ const rj=el('span','pill','rejected — runner retry'); rj.style.background='#faeeda'; rj.style.color='#854f0b'; top.appendChild(rj); }
- if(bucket==='inprogress'){ const ap=el('span','pill','approved'); ap.style.background='#e1f5ee'; ap.style.color='#085041'; top.appendChild(ap); }
  c.appendChild(top);
  c.appendChild(el('div','meta','#'+(row.id||'').slice(0,8)+' · reported '+fmtDay(parseTs(row.created_at))));
- if(Array.isArray(row.skills)&&row.skills.length){ const sk=el('div'); sk.style.marginTop='6px'; for(const s of row.skills) if(s) sk.appendChild(el('span','sk',s)); c.appendChild(sk); }
+ const reg=wsRegressionLine(row); if(reg) c.appendChild(reg);
+ const skillsArr=Array.isArray(row.skills)?row.skills:String(row.skills||'').split(', ').filter(Boolean);
+ if(skillsArr.length){ const sk=el('div'); sk.style.marginTop='6px'; for(const s of skillsArr) if(s) sk.appendChild(el('span','sk',s)); c.appendChild(sk); }
  if(row.description) c.appendChild(el('div','desc',row.description));
  // deploy-class silencer: loud, un-rubber-stampable warning (mirrors the contract guardrail)
  if(dc) c.appendChild(el('div','warn-deploy','⚠ This silences these alerts. It edits detector / producer logic — approving means you intend to stop these warnings. Confirm only if that’s right.'));
- // runner proposal (read + diff + self-review), or bare
- if(row.has_proposal) rvProposal(c,row);
- else c.appendChild(el('div','sub','No proposed fix — the runner couldn’t (or shouldn’t) author one. Dismiss with a reason, or work it in Claude.'));
+ // runner proposal (read + diff + self-review) when one exists; otherwise bare (the common case while the runner is parked)
+ if(hasProp) rvProposal(c,row);
+ else c.appendChild(el('div','sub','No proposed fix yet. Dismiss with a reason, or work it in Claude.'));
  const acts=el('div','acts');
  const dismissBox=rvDismissBox(row);
  // Mirror the server's has_proposal derivation (runner_proposal->'proposed_change' IS NOT NULL):
  // never offer Approve/Reject on a row dash_approve_fix would reject (bare / no_fix / malformed).
- const approvable=row.has_proposal&&row.runner_proposal&&row.runner_proposal.proposed_change!=null;
+ const approvable=hasProp&&prop&&prop.proposed_change!=null;
  if(bucket==='toreview'&&approvable){
   // Approve — deploy-class needs an explicit second tap that passes p_confirm_deploy_class=true
   const ab=el('button','res-btn','Approve');
@@ -1031,7 +1082,7 @@ function reviewCard(row,bucket){
    if(!UUID.test(row.id)) return;
    if(dc&&!armed){ armed=true; ab.textContent='⚠ Confirm — silence these alerts'; ab.style.borderColor='#791f1f'; ab.style.color='#791f1f'; return; }
    ab.disabled=true; ab.textContent='Approving…';
-   try{ await rpc('dash_approve_fix',{p_id:row.id,p_confirm_deploy_class:dc}); loadReview(); }
+   try{ await rpc('dash_approve_fix',{p_id:row.id,p_confirm_deploy_class:dc}); loadWorkshop(); }
    catch(e){ ab.disabled=false; ab.textContent=dc?'⚠ Confirm — silence these alerts':'Approve'; setBanner('Could not approve: '+e.message,'r'); }
   };
   acts.appendChild(ab);
@@ -1039,7 +1090,7 @@ function reviewCard(row,bucket){
   rb.onclick=async()=>{
    if(!UUID.test(row.id)) return;
    rb.disabled=true; rb.textContent='Rejecting…';
-   try{ await rpc('dash_reject_fix',{p_id:row.id,p_note:null}); loadReview(); }
+   try{ await rpc('dash_reject_fix',{p_id:row.id,p_note:null}); loadWorkshop(); }
    catch(e){ rb.disabled=false; rb.textContent='Reject'; setBanner('Could not reject: '+e.message,'r'); }
   };
   acts.appendChild(rb);
@@ -1056,34 +1107,6 @@ function reviewCard(row,bucket){
  c.appendChild(dismissBox);
  return c;
 }
-function renderReview(rows){
- const main=document.getElementById('v-review');
- main.textContent='';
- main.appendChild(el('p','sub','Every open flag, with the runner’s proposed fix when it has one. You are the approver: nothing the runner proposes is applied until you approve it and apply it in a live session. Approve a fix, reject it back to the runner, or dismiss with a reason — every dismissal is recorded.'));
- rows=Array.isArray(rows)?rows:[];
- const B={toreview:[],inprogress:[]};
- for(const r of rows){ const b=rvBucket(r); if(b&&B[b]) B[b].push(r); }
- let active=localStorage.getItem('fh-rv-tab');
- if(!RV_STAGES.some(([k])=>k===active)) active=null;
- if(!active) active=(RV_STAGES.find(([k])=>B[k].length)||['toreview'])[0];
- const tabs=el('div'); tabs.style.cssText='display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:2px 0 10px;';
- for(const[k,label,hint]of RV_STAGES){
-  const t=el('button',null,label+' '+B[k].length); t.title=hint;
-  t.style.cssText='flex:none;font-size:12px;padding:6px 12px;border-radius:999px;border:1px solid '+(k===active?'#1a1915':'#d3d1c7')+';background:'+(k===active?'#1a1915':'#fff')+';color:'+(k===active?'#fff':(B[k].length?'#1a1915':'#9a988f'))+';';
-  t.onclick=()=>{ localStorage.setItem('fh-rv-tab',k); renderReview(rows); };
-  tabs.appendChild(t);
- }
- main.appendChild(tabs);
- const hint=RV_STAGES.find(([k])=>k===active);
- main.appendChild(el('p','sub',hint[2]));
- const cur=B[active];
- if(cur.length===0) main.appendChild(el('div','allcaught',active==='toreview'?'Nothing to review — the runner has no proposals waiting and no bare flags are open.':'Nothing approved and waiting to apply.'));
- else for(const r of cur) main.appendChild(reviewCard(r,active));
- main.appendChild(el('p','sub','Source: dash_review_queue() (every open skill_issues row, live). Approve / Reject / Dismiss record state + provenance through gated RPCs; the fix is applied later by you in an attended session. Dismissed and closed items move to the Workshop board.'));
- renderReview._banner=B.toreview.length?[B.toreview.length+' to review'+(B.inprogress.length?' · '+B.inprogress.length+' approved':''),'a']:(B.inprogress.length?[B.inprogress.length+' approved · apply in a session','a']:['nothing to review','g']);
- setBanner(...renderReview._banner);
-}
-
 /* ============ Client files (W13 port — reads nightly snapshots) ============ */
 const STATC={'active':['#D9EAD3','#1d5a32'],'exclusive':['#E4D9F0','#4a3270'],'sold':['#F4CCCC','#7a1f1f'],'sold firm':['#F4CCCC','#7a1f1f'],'leased':['#F4CCCC','#7a1f1f'],'sold conditional':['#CFE2F3','#1f4e79'],'leased conditional':['#CFE2F3','#1f4e79'],'suspended':['#FFF2CC','#7a5c00'],'terminated':['#EFEFEF','#666'],'expired':['#EFEFEF','#666']};
 const norm=s=>String(s||'').trim().toLowerCase();
@@ -1587,12 +1610,11 @@ async function loadSettings(){
  main.appendChild(card3);
 }
 
-const LOADERS={updates:loadUpdates,clients:loadClients,followups:loadFollowups,review:loadReview,workshop:loadWorkshop,health:loadHealth,settings:loadSettings};
+const LOADERS={updates:loadUpdates,clients:loadClients,followups:loadFollowups,workshop:loadWorkshop,health:loadHealth,settings:loadSettings};
 const REBANNER={
  updates:()=>{if(renderUpdates._banner)setBanner(...renderUpdates._banner);},
  clients:()=>{if(renderClientPicker._banner)setBanner(...renderClientPicker._banner);},
  followups:()=>{if(renderFollowups._banner)setBanner(...renderFollowups._banner);},
- review:()=>{if(renderReview._banner)setBanner(...renderReview._banner);},
  workshop:()=>{if(renderWorkshop._banner)setBanner(...renderWorkshop._banner);},
  health:()=>{if(renderHealth._banner)setBanner(...renderHealth._banner);},
  settings:()=>{}
