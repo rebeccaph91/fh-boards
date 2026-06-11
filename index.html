@@ -810,6 +810,16 @@ function wsEvidenceBlock(row){
    The "stage:" status chip is dropped (the tab is the stage). Adds the status-aware-dedup
    recurrence indicator + regression back-link, Confirm-working on Verifying, Work-in-Claude
    on In progress, and the dismissal reason on Dismissed. To review uses reviewCard, not this. */
+function wsVerifyingAge(row){
+ if(!row.updated_at) return null;
+ const t=parseTs(row.updated_at); const ms=(t instanceof Date)?t.getTime():+t;
+ if(!ms||isNaN(ms)) return null;
+ const days=Math.floor((Date.now()-ms)/86400000);
+ if(days<3) return null; // only nag once it has genuinely sat in Verifying a while
+ const p=el('span','pill','stuck '+days+'d');
+ if(days>=7){p.style.background='#fcebeb';p.style.color='#791f1f';}else{p.style.background='#faeeda';p.style.color='#854f0b';}
+ return p;
+}
 function wsCard(row,bucket){
  const c=el('div','item');
  const top=el('div');
@@ -824,6 +834,7 @@ function wsCard(row,bucket){
  else{rv.style.background='#faeeda';rv.style.color='#854f0b';}
  top.appendChild(rv);
  const rcp=wsRecurrencePill(row); if(rcp) top.appendChild(rcp);
+ if(bucket==='verifying'){ const ap=wsVerifyingAge(row); if(ap) top.appendChild(ap); }
  c.appendChild(top);
  c.appendChild(el('div','meta','#'+(row.id||'').slice(0,8)+' · reported '+fmtDay(parseTs(row.created_at))+(row.closed_at?' · closed '+fmtDay(parseTs(row.closed_at)):'')));
  const reg=wsRegressionLine(row); if(reg) c.appendChild(reg);
@@ -841,7 +852,7 @@ function wsCard(row,bucket){
   c.appendChild(rl);
  }
  const hasDetail=row.root_cause||row.fix||row.prevention||row.lens_ai_swe||row.lens_ml||row.lens_db||row.lens_github||row.lens_devops;
- let detail=null;
+ let detail=null; let vDismiss=null;
  const acts=el('div','acts');
  if(hasDetail){
   detail=el('div','detail');detail.style.display='none';
@@ -875,6 +886,11 @@ function wsCard(row,bucket){
   hb.style.borderColor='#9fe1cb';hb.style.color='#085041';
   hb.onclick=()=>copyPrompt('Verify-and-close workshop issue '+row.id+' ("'+(row.title||'').replace(/"/g,'')+'") from the Verifying tab. The fix is applied; confirm a clean run (no re-trigger of the same flag/signature) is the evidence, complete the 5×3 if any rounds remain, then close — the DB close gate requires prevention + 5×3 + evidence (a passed clean-run check or your Confirm-working attestation).',hb);
   acts.appendChild(hb);
+  // abandon escape (ed2ab1c9): a Verifying ticket can be dismissed with a reason so it can never strand
+  vDismiss=rvDismissBox(row);
+  const xb=el('button',null,'Dismiss');
+  xb.onclick=()=>{ const open=vDismiss.style.display!=='none'; vDismiss.style.display=open?'none':'block'; xb.textContent=open?'Dismiss':'Cancel dismiss'; };
+  acts.appendChild(xb);
   c.appendChild(msg); // status line for the Confirm-working handler (empty until it has something to say)
  }else if(bucket==='inprogress'){
   const hb=el('button','res-btn','Work in Claude');
@@ -882,6 +898,7 @@ function wsCard(row,bucket){
   acts.appendChild(hb);
  }
  if(acts.children.length) c.appendChild(acts);
+ if(vDismiss) c.appendChild(vDismiss);
  if(detail) c.appendChild(detail);
  const ev=wsEvidenceBlock(row); if(ev) c.appendChild(ev);
  return c;
