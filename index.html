@@ -811,8 +811,9 @@ function wsEvidenceBlock(row){
    recurrence indicator + regression back-link, Confirm-working on Verifying, Work-in-Claude
    on In progress, and the dismissal reason on Dismissed. To review uses reviewCard, not this. */
 function wsVerifyingAge(row){
- if(!row.updated_at) return null;
- const t=parseTs(row.updated_at); const ms=(t instanceof Date)?t.getTime():+t;
+ const src=row.verifying_since||row.updated_at; // verifying_since is the true entry stamp; updated_at is a fallback
+ if(!src) return null;
+ const t=parseTs(src); const ms=(t instanceof Date)?t.getTime():+t;
  if(!ms||isNaN(ms)) return null;
  const days=Math.floor((Date.now()-ms)/86400000);
  if(days<3) return null; // only nag once it has genuinely sat in Verifying a while
@@ -891,6 +892,7 @@ function wsCard(row,bucket){
   const xb=el('button',null,'Dismiss');
   xb.onclick=()=>{ const open=vDismiss.style.display!=='none'; vDismiss.style.display=open?'none':'block'; xb.textContent=open?'Dismiss':'Cancel dismiss'; };
   acts.appendChild(xb);
+  c.appendChild(el('div','sub','Confirm working = the fix held → closes it. Dismiss = stop tracking it (won’t resurface).'));
   c.appendChild(msg); // status line for the Confirm-working handler (empty until it has something to say)
  }else if(bucket==='inprogress'){
   const hb=el('button','res-btn','Work in Claude');
