@@ -1383,9 +1383,44 @@ async function cfListNotes(c,card){
   if(!rows.length) return;
   const nl=el('div');nl.style.marginTop='10px';
   rows.forEach(r=>{
-   const d=el('div','quote',r.note);
+   const d=el('div','quote');
+   const body=el('div',null,r.note); d.appendChild(body);
    const m=el('div','muted',(r.status==='pending'?'⏳ pending — applies on the next sweep':'✓ applied'+(r.applied_to?' to '+r.applied_to:''))+' · '+String(r.created_at).slice(0,16));
-   d.appendChild(m);nl.appendChild(d);
+   d.appendChild(m);
+   if(r.status==='pending'&&r.id){
+    const edit=el('button','linkish','Edit'); edit.style.marginLeft='2px';
+    edit.onclick=()=>{
+     const ta=document.createElement('textarea'); ta.rows=2; ta.value=r.note;
+     ta.style.cssText='display:block;width:100%;box-sizing:border-box;margin-top:6px;font:15px -apple-system,sans-serif;padding:8px;border:1px solid #d3d1c7;border-radius:8px;background:#fff;color:#1a1915;';
+     const save=el('button','res-btn','Save'); save.style.marginTop='6px';
+     const cancel=el('button',null,'Cancel'); cancel.style.marginLeft='6px';
+     const emsg=el('span','muted',''); emsg.style.marginLeft='8px';
+     save.onclick=async()=>{
+      const v=ta.value.trim();
+      if(!v){emsg.textContent='Type the note first.';return;}
+      if(v.length>4000){emsg.textContent='Too long.';return;}
+      save.disabled=true; emsg.textContent='Saving…';
+      try{ const ok=await rpc('dash_broker_note_edit',{p_id:r.id,p_note:v});
+        if(ok!==true) setBanner('That note was just applied — it can no longer be edited.','a');
+        cfListNotes(c,card);
+      }catch(e){ save.disabled=false; emsg.textContent='Save failed: '+String(e.message||'').slice(0,60); }
+     };
+     cancel.onclick=()=>cfListNotes(c,card);
+     body.style.display='none'; m.style.display='none'; edit.style.display='none';
+     d.appendChild(ta); d.appendChild(save); d.appendChild(cancel); d.appendChild(emsg);
+     ta.focus();
+    };
+    d.appendChild(edit);
+    const disc=el('button','linkish','Discard'); disc.style.marginLeft='8px'; disc.style.color='#791f1f';
+    disc.onclick=async()=>{
+     if(!confirm('Discard this pending note? It will not be applied.')) return;
+     disc.disabled=true;
+     try{ await rpc('dash_broker_note_discard',{p_id:r.id}); cfListNotes(c,card); }
+     catch(e){ disc.disabled=false; setBanner('Could not discard: '+e.message,'r'); }
+    };
+    d.appendChild(disc);
+   }
+   nl.appendChild(d);
   });
   card.appendChild(nl);card._nl=nl;
  }catch(e){}
