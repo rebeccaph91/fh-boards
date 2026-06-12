@@ -1030,8 +1030,11 @@ function renderWorkshop(rows,flags){
   tabs.appendChild(t);
  }
  main.appendChild(tabs);
- // By-skill batch affordance (a3f7b7aa): work all of one skill's open tickets in one session
- const _act=(B.toreview||[]).concat(B.inprogress||[],B.verifying||[]);
+ // By-skill batch affordance (a3f7b7aa): work all of one skill's open tickets in one session.
+ // a0296f78 (2026-06-12, broker decision): ACTIONABLE ONLY — count To review tickets, not
+ // In progress / Verifying (those are in flight, not workable; a deployed batch awaiting
+ // overnight evidence must not read as open work). Flags reach To review via the 2h bridge.
+ const _act=(B.toreview||[]).slice();
  const _skm={};
  for(const r of _act){ const a=Array.isArray(r.skills)?r.skills:String(r.skills||'').split(', ').filter(Boolean); for(const sx of a){ if(!sx)continue; (_skm[sx]=_skm[sx]||[]).push(r); } }
  const _skn=Object.keys(_skm).filter(x=>_skm[x].length>1).sort((a,b)=>_skm[b].length-_skm[a].length);
