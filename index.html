@@ -218,6 +218,40 @@ function copyPrompt(t,b){
  const _rm=x.remove.bind(x);x.remove=()=>{lbl.remove();_rm();};
  try{if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(t).catch(()=>{lbl.textContent='Copy this and paste it into a Claude chat on your computer:';});}catch(e){}
 }
+/* ---- Workshop trigger-prompt builders (issue 93fc542a) ----
+   Fresh Claude sessions boot COLD: no folder mounts, no credentials, no ritual
+   context (Memory/cold-start-triggers.md). Every workshop copy-to-Claude
+   trigger therefore carries WS_BOOT, and each lifecycle stage has exactly ONE
+   builder -- never inline a prompt literal on a button (inline literals are how
+   the text drifted from the 5×3 gate / auto-bridge / Phase D in the first place). */
+const FH_DIR='/Users/rebeccahimelfarb/Forest Hill YV Dropbox/Rebecca Himelfarb/Personal Files/Files (Rebecca Himelfarb)/Claude/';
+const WS_BOOT='Connect these folders first: '+FH_DIR+'FIX CLAUDE, '+FH_DIR+'Memory, and /Users/rebeccahimelfarb/.forest-hill (Supabase credentials). Read Memory/skill-workshop-ritual.md before acting. ';
+const WS_ROUNDS='Log each lens’s round in review_log as a structured entry {lens, round, reviewer, independent, at} (lenses: ai_swe, ml, db, version_control, devops); use cold subagents for at least one independent round per lens, with at least 2 distinct reviewers overall. Never hand-set review_rounds — it is derived from the weakest lens.';
+const WS_APPLY='I approved its runner-proposed fix (review_state=approved). Apply it ONLY via the Phase D attended-apply path — FIX CLAUDE/apply/attended-apply.js: apply_load_proposal → apply_open (audit-first) → write the change → secret-scan → issue-id-tagged commit → apply_mark_applied → apply_begin_gate → run the W10 gate → apply_record_gate bound to THIS diff. The runner never applies — you do, attended. A deploy-class change needs my typed CONFIRM even after approval. On CLEAN the issue advances to fix_staged (Verifying); on FAILED revert per the apply ledger. '+WS_ROUNDS;
+function wsPromptFlag(p){
+ return WS_BOOT+'Handle workshop flag pending_followups id '+p.id+' (kind "'+(p.kind||'')+'" from '+(p.source_skill||'unknown')+'). Do NOT hand-insert a skill_issues row: run dash_run_bridge() and find the promoted ticket by this flag’s bridge signature (links->>\'bridge_signature\'); if a matching non-closed ticket already exists (the dedup index covers every status except closed), work that one instead. Only if the bridge cannot promote it, insert the skill_issues row yourself AND stamp links.bridge_signature with the bridge’s frozen formula so future recurrences bump “seen again” instead of duplicating. Then run the full workshop ritual on the ticket (five lenses → fix → prevention → 5×3 review). Payload preview: '+String(p.payload||'').slice(0,300);
+}
+function wsPromptReviewRound(row,n){
+ return WS_BOOT+'Run five-lens review round '+n+' on the work done for skill issue "'+(row.title||'').replace(/"/g,'')+'" (skill_issues id '+row.id+') — the lenses review the fix and the prevention, not the original bug. Fix and add prevention for anything the review finds. '+WS_ROUNDS;
+}
+function wsPromptVerify(row){
+ return WS_BOOT+'Verify-and-close workshop issue '+row.id+' ("'+(row.title||'').replace(/"/g,'')+'") from the Verifying tab. The fix is applied; confirm a clean run (no re-trigger of the same flag/signature) as the evidence, complete the 5×3 if any rounds remain — '+WS_ROUNDS+' — then close: the DB close gate requires prevention + the 5×3 + evidence (a passed clean-run check or my Confirm-working attestation).';
+}
+function wsPromptInProgress(row){
+ const base=WS_BOOT+'Continue working workshop issue '+row.id+' ("'+(row.title||'').replace(/"/g,'')+'") from the In progress tab. ';
+ const prop=(row.runner_proposal&&typeof row.runner_proposal==='object')?row.runner_proposal:null;
+ if(prop&&prop.proposed_change!=null&&row.review_state==='approved') return base+WS_APPLY;
+ return base+'Apply the fix through the release machinery (source edit → version bump → push → deploy → verify-deploy), run the W10 gate bound to this diff, then advance to fix_staged (Verifying). Continue the 5×3 review in the same attended session. '+WS_ROUNDS;
+}
+function wsPromptEvidencePassed(row,n){
+ return WS_BOOT+'All '+n+' close-evidence checks for skill issue "'+(row.title||'').replace(/"/g,'')+'" (skill_issues id '+row.id+') show passed in issue_evidence_checks. Re-verify the evidence rows yourself, then set status=closed (the DB close gate enforces prevention + the 5×3 structured review) and append an evidence_verified entry to review_log. '+WS_ROUNDS;
+}
+function wsPromptEvidenceFailed(row){
+ return WS_BOOT+'A close-evidence check failed for skill issue "'+(row.title||'').replace(/"/g,'')+'" (skill_issues id '+row.id+'). Read its issue_evidence_checks rows + any sys_evidence_check_failed followups, work out whether the fix needs more work or the check needs correcting, and proceed per the workshop ritual.';
+}
+function wsPromptRunHealth(skillId,state){
+ return WS_BOOT+'Investigate '+skillId+'\u2019s "'+state+'" run state: read its recent runs rows + skill_health in Supabase (not the phone UI), work out why, and if a real defect emerges file it on the workshop board per the ritual (RULE 0).';
+}
 function setBanner(txt,kind){
  const b=document.getElementById('banner');
  b.textContent=txt;
@@ -795,11 +829,11 @@ function wsEvidenceBlock(row){
   const acts=el('div','acts');
   if(all){
    const cb=el('button',null,'Copy "evidence verified — close" for Claude');
-   cb.onclick=()=>copyPrompt('All '+list.length+' close-evidence checks for skill issue "'+row.title+'" (skill_issues id '+row.id+') show passed in issue_evidence_checks. Re-verify the evidence rows yourself, then set status=closed (the DB close gate enforces prevention + 3 review rounds) and append an evidence_verified entry to review_log.',cb);
+   cb.onclick=()=>copyPrompt(wsPromptEvidencePassed(row,list.length),cb);
    acts.appendChild(cb);
   }else if(anyFail){
    const ib=el('button',null,'Copy "evidence failed — investigate" for Claude');
-   ib.onclick=()=>copyPrompt('A close-evidence check failed for skill issue "'+row.title+'" (skill_issues id '+row.id+'). Read its issue_evidence_checks rows + any sys_evidence_check_failed followups, work out whether the fix needs more work or the check needs correcting, and proceed per the workshop ritual.',ib);
+   ib.onclick=()=>copyPrompt(wsPromptEvidenceFailed(row),ib);
    acts.appendChild(ib);
   }
   if(acts.children.length) wrap.appendChild(acts);
@@ -880,12 +914,12 @@ function wsCard(row,bucket){
   acts.appendChild(cb);
   if(rr<3){
    const rb=el('button',null,'Copy "review round '+(rr+1)+'" for Claude');
-   rb.onclick=()=>copyPrompt('Run five-lens review round '+(rr+1)+' on the work done for skill issue "'+row.title+'" (skill_issues id '+row.id+'). Fix and add prevention for anything the review finds, log the round in review_log, and increment review_rounds.',rb);
+   rb.onclick=()=>copyPrompt(wsPromptReviewRound(row,rr+1),rb);
    acts.appendChild(rb);
   }
   const hb=el('button',null,'Work in Claude');
   hb.style.borderColor='#9fe1cb';hb.style.color='#085041';
-  hb.onclick=()=>copyPrompt('Verify-and-close workshop issue '+row.id+' ("'+(row.title||'').replace(/"/g,'')+'") from the Verifying tab. The fix is applied; confirm a clean run (no re-trigger of the same flag/signature) is the evidence, complete the 5×3 if any rounds remain, then close — the DB close gate requires prevention + 5×3 + evidence (a passed clean-run check or your Confirm-working attestation).',hb);
+  hb.onclick=()=>copyPrompt(wsPromptVerify(row),hb);
   acts.appendChild(hb);
   // abandon escape (ed2ab1c9): a Verifying ticket can be dismissed with a reason so it can never strand
   vDismiss=rvDismissBox(row);
@@ -896,7 +930,7 @@ function wsCard(row,bucket){
   c.appendChild(msg); // status line for the Confirm-working handler (empty until it has something to say)
  }else if(bucket==='inprogress'){
   const hb=el('button','res-btn','Work in Claude');
-  hb.onclick=()=>copyPrompt('Continue working workshop issue '+row.id+' ("'+(row.title||'').replace(/"/g,'')+'") from the In progress tab: apply the fix through the release machinery, run the W10 gate bound to this diff, then move it to Verifying. Run the 5×3 review as part of the same attended session.',hb);
+  hb.onclick=()=>copyPrompt(wsPromptInProgress(row),hb);
   acts.appendChild(hb);
  }
  if(acts.children.length) c.appendChild(acts);
@@ -918,7 +952,7 @@ function wsFlagCard(p){
  if(p.payload&&p.payload!=='null') c.appendChild(el('div','desc',p.payload));
  const acts=el('div','acts');
  const ob=el('button',null,'Copy "open as issue" for Claude');
- ob.onclick=()=>copyPrompt('Capture this flag as a skill_issues row and start the workshop ritual on it: kind "'+(p.kind||'')+'" from '+(p.source_skill||'unknown')+', pending_followups id '+p.id+'. Payload: '+String(p.payload||'').slice(0,300)+'. Resolve the underlying followup once captured.',ob);
+ ob.onclick=()=>copyPrompt(wsPromptFlag(p),ob);
  acts.appendChild(ob);
  const db=el('button',null,'✓ Dismiss');
  db.onclick=async()=>{
@@ -1056,13 +1090,14 @@ function rvDismissBox(row){
  wrap.appendChild(ta); wrap.appendChild(go); wrap.appendChild(msg);
  return wrap;
 }
-function rvClaudePrompt(row,bucket){
+function rvClaudePrompt(row){
  const t=(row.title||'').replace(/"/g,'');
- const base='Work workshop issue '+(row.id||'')+' ("'+t+'") from the To Review board. ';
- if(bucket==='inprogress'){
-  return base+'I approved its runner-proposed fix (review_state=approved, status still open). Apply it in this attended session per the workshop ritual: re-read runner_proposal on the skill_issues row, apply the change through the release machinery, run the W10 gate bound to THIS diff (keyed to run-id + diff-hash), write an audit-first record + a revertable commit (commit-with-issue-id), then advance and close via 5×3. The runner never applies — you do.';
- }
- return base+'Read its skill_issues row (title, runner_proposal: disposition / classification_reason / proposed_change / self_review). Decide with me whether to Approve, Reject, or Dismiss, then run the workshop ritual. If it is a deploy-class silencer, treat approving as intentionally stopping those alerts and confirm with me first.';
+ const base=WS_BOOT+'Work workshop issue '+(row.id||'')+' ("'+t+'") from the To review tab. ';
+ const prop=(row.runner_proposal&&typeof row.runner_proposal==='object')?row.runner_proposal:null;
+ const hasProp=!!(prop&&prop.proposed_change!=null);
+ if(hasProp&&row.review_state==='approved') return base+WS_APPLY;
+ if(hasProp) return base+'Read its skill_issues row (title, runner_proposal: disposition / classification_reason / proposed_change / self_review) and review the proposal with me — I approve, reject, or dismiss on the board, not you. If it is deploy-class, approving intentionally silences those alerts — confirm that with me explicitly. After my approval the fix is applied ONLY via the Phase D attended-apply path, in an attended session. '+WS_ROUNDS;
+ return base+'It has NO runner proposal, so Approve/Reject do not apply. Run the workshop ritual on it with me: five lenses (record root_cause + each lens take on the row, set status=workshopped), then author the fix through the release machinery and record prevention. '+WS_ROUNDS;
 }
 function reviewCard(row,bucket){
  const c=el('div','item');
@@ -1120,7 +1155,7 @@ function reviewCard(row,bucket){
  // Work in Claude — reuse the Follow-ups copy-for-Claude pattern (hands the ticket to an attended session)
  const hb=el('button',null,'Work in Claude');
  hb.style.borderColor='#9fe1cb'; hb.style.color='#085041';
- hb.onclick=()=>copyPrompt(rvClaudePrompt(row,bucket),hb);
+ hb.onclick=()=>copyPrompt(rvClaudePrompt(row),hb);
  acts.appendChild(hb);
  c.appendChild(acts);
  c.appendChild(dismissBox);
@@ -1567,7 +1602,7 @@ function renderHealth(HEALTH_SKILLS,runs,pfs,schedOk,mirror,HB){
    if(p&&(p.textContent==='missed'||p.textContent==='failed'||p.textContent==='partial')){
     const b=el('button',null,'Copy "investigate" for Claude');
     b.style.marginTop='6px';
-    b.onclick=()=>copyPrompt("Investigate "+sk.id+"'s "+p.textContent+" run state on the run-health dashboard",b);
+    b.onclick=()=>copyPrompt(wsPromptRunHealth(sk.id,p.textContent),b);
     body.appendChild(b);
    }
   }
