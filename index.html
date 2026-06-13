@@ -1473,7 +1473,7 @@ function renderClientPicker(){
   const set=CF_LIST.filter(c=>c.client_type===kind);if(!set.length)return;
   pickers.appendChild(el('h2',null,title));
   const row=el('div','pick');
-  set.forEach(c=>{const b=el('button','chip',c.display_name+(c.pulled_at?'':' ·new'));b.onclick=()=>openClient(c,b,detail);row.appendChild(b);});
+  set.forEach(c=>{const b=el('button','chip',c.display_name);b.onclick=()=>openClient(c,b,detail);row.appendChild(b);});
   pickers.appendChild(row);
  };
  mk('seller','Listings');mk('buyer','Buyers');
