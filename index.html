@@ -1228,8 +1228,8 @@ function cfClassify(t){
  if(has('date of submission')) return 'offers';
  if(has('activitydate','stattype')||has('publisher','stattype')) return 'listtrac';
  if(has('first mentioned')) return 'skip';
- const flat=t.rows.map(r=>r.map(norm).join(' ')).join(' ').replace(/\\/g,'');
- if(/pull_at|personid|url_hash|listtrac listing lid/.test(flat)) return 'skip';
+ const keys=t.rows.map(r=>norm(r[0])).join(' ').replace(/\\/g,'');  // bookkeeping skip matches KEYS (col A) only — a profile VALUE mentioning personId/pull_at must not hide the whole file (issue 4e00057d)
+ if(/pull_at|personid|url_hash|listtrac listing lid/.test(keys)) return 'skip';
  if(t.rows.every(r=>r.length<=2)||t.rows[0].length===2) return 'profile';
  return 'other';
 }
