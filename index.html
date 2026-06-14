@@ -282,12 +282,15 @@ function show(view){
  document.getElementById('viewtitle').textContent=TITLES[view];
  setBanner('…','n');
  if(!loaded[view]){loaded[view]=true;LOADERS[view]();}
- else if(view==='settings')LOADERS.settings();
+ else if(view==='settings'||view==='workshop')LOADERS[view]();  // 961386ce: workshop ALWAYS re-fetches on re-entry so the To-review counts + the By-skill rollup are never stale
  else REBANNER[view]();
 }
 document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>show(t.dataset.v));
 document.getElementById('acct').onclick=()=>show('settings');
 document.getElementById('refresh').onclick=()=>{loaded[current]=true;LOADERS[current]();};
+// 961386ce: when the app returns to the foreground (e.g. after working a By-skill batch in
+// Claude on the computer) re-fetch the active view so counts reflect reality without a manual refresh.
+document.addEventListener('visibilitychange',()=>{ if(document.hidden) return; if(document.getElementById('app').classList.contains('hidden')) return; if(LOADERS[current]) LOADERS[current](); });
 
 /* ============ auth ============ */
 function showLogin(){document.getElementById('app').classList.add('hidden');document.getElementById('login').classList.remove('hidden');}
@@ -800,7 +803,9 @@ function wsRegressionLine(row){
  return d;
 }
 let WS_CHECKS={};
+let _wsLoading=false;  // 961386ce: in-flight guard — workshop now re-fetches on every show()/foreground, so rapid taps must not overlap (double dash_evidence_eval + a slow earlier render clobbering a fresher one)
 async function loadWorkshop(){
+ if(_wsLoading) return; _wsLoading=true;
  const main=document.getElementById('v-workshop');
  main.textContent='';setBanner('loading…','n');
  try{
@@ -811,6 +816,7 @@ async function loadWorkshop(){
   if(Array.isArray(checks))for(const c of checks){(WS_CHECKS[c.issue_id]=WS_CHECKS[c.issue_id]||[]).push(c);}
   renderWorkshop(rows,flags);
  }catch(e){errBox(main,'Could not load issues: '+e.message,loadWorkshop);}
+ finally{_wsLoading=false;}
 }
 function wsEvidenceBlock(row){
  const list=WS_CHECKS[row.id]; if(!list||!list.length) return null;
@@ -1042,8 +1048,10 @@ function renderWorkshop(rows,flags){
   const sw=el('div'); sw.style.cssText='margin:0 0 10px;';
   const stg=el('button',null,'\u25b8 By skill \u2014 work a whole skill at once ('+_skn.length+')');
   stg.style.cssText='font-size:12px;padding:5px 10px;border-radius:8px;border:1px dashed #c9c4f2;background:#fbfaf7;color:#3c3489;';
-  const sbody=el('div'); sbody.style.cssText='display:none;margin-top:8px;';
-  stg.onclick=()=>{const o=sbody.style.display!=='none';sbody.style.display=o?'none':'block';stg.textContent=(o?'\u25b8':'\u25be')+' By skill \u2014 work a whole skill at once ('+_skn.length+')';};
+  const _skOpen=localStorage.getItem('fh-ws-byskill-open')==='1';  // 961386ce: remember open/closed across re-renders so a live refresh updates the count in place
+  const sbody=el('div'); sbody.style.cssText='display:'+(_skOpen?'block':'none')+';margin-top:8px;';
+  stg.textContent=(_skOpen?'\u25be':'\u25b8')+' By skill \u2014 work a whole skill at once ('+_skn.length+')';
+  stg.onclick=()=>{const o=sbody.style.display!=='none';sbody.style.display=o?'none':'block';localStorage.setItem('fh-ws-byskill-open',o?'0':'1');stg.textContent=(o?'\u25b8':'\u25be')+' By skill \u2014 work a whole skill at once ('+_skn.length+')';};
   for(const sx of _skn){
    const rw=el('div'); rw.style.cssText='display:flex;align-items:center;gap:8px;padding:4px 0;';
    rw.appendChild(el('span','sk',sx+' ('+_skm[sx].length+')'));
