@@ -776,9 +776,23 @@ const WS_STAGES=[
  ['closed','Closed','Done: reviewed, evidenced, and prevented from recurring.'],
  ['dismissed','Dismissed','Looked at and set aside — each with a recorded reason.']
 ];
-// map a skill_issues row to its lifecycle bucket (Flags is sourced separately)
-function wsStatusBucket(s){
- if(s==='open') return 'toreview';
+// bf7eea06: an OPEN ticket a Claude session has CLAIMED (work_started_at set, within this TTL) shows
+// In progress the minute work starts — not only once status reaches 'workshopped'. A stale/abandoned
+// claim falls back to To review so a crashed session never strands a ticket. The session stamps the
+// claim by calling dash_workshop_claim() as its first action (see rvClaudePrompt); the DB clears it the
+// moment the ticket leaves 'open'.
+const WS_CLAIM_TTL_MS=6*60*60*1000; // 6h
+function wsIsClaimedOpen(r){
+ if(!r||typeof r!=='object'||r.status!=='open') return false;
+ const ws=r.work_started_at;
+ if(typeof ws!=='string'||!ws) return false;   // feed casts ::text; guard non-string so a render can't throw
+ const t=parseTs(ws); const v=(t instanceof Date)?t.getTime():+t;
+ return !!v && !isNaN(v) && (Date.now()-v)<WS_CLAIM_TTL_MS;
+}
+// map a skill_issues row (or a bare status string — W10 harness back-compat) to its lifecycle bucket.
+function wsStatusBucket(r){
+ const s=(r&&typeof r==='object')?r.status:r;
+ if(s==='open') return wsIsClaimedOpen(r)?'inprogress':'toreview';
  if(s==='workshopped') return 'inprogress';
  if(s==='fix_staged'||s==='deployed'||s==='verified') return 'verifying';
  if(s==='closed') return 'closed';
@@ -899,6 +913,8 @@ function wsCard(row,bucket){
  top.appendChild(rv);
  const rcp=wsRecurrencePill(row); if(rcp) top.appendChild(rcp);
  if(bucket==='verifying'){ const ap=wsVerifyingAge(row); if(ap) top.appendChild(ap); }
+ // bf7eea06: a still-open ticket reaches the In progress bucket only because a session CLAIMED it — flag that.
+ if(bucket==='inprogress'&&row.status==='open'){ const wp=el('span','pill','being worked'); wp.style.background='#eaf3ff'; wp.style.color='#1f4e79'; top.appendChild(wp); }
  c.appendChild(top);
  c.appendChild(el('div','meta','#'+(row.id||'').slice(0,8)+' · reported '+fmtDay(parseTs(row.created_at))+(row.closed_at?' · closed '+fmtDay(parseTs(row.closed_at)):'')));
  const reg=wsRegressionLine(row); if(reg) c.appendChild(reg);
@@ -959,7 +975,9 @@ function wsCard(row,bucket){
   c.appendChild(msg); // status line for the Confirm-working handler (empty until it has something to say)
  }else if(bucket==='inprogress'){
   const hb=el('button','res-btn','Work in Claude');
-  hb.onclick=()=>copyPrompt(wsPromptInProgress(row),hb);
+  // bf7eea06: a CLAIMED-open ticket (status still 'open') hasn't been workshopped yet — it needs the full
+  // ritual from the five lenses, so hand it the To-review prompt; a workshopped+ ticket gets the continue prompt.
+  hb.onclick=()=>copyPrompt(row.status==='open'?rvClaudePrompt(row):wsPromptInProgress(row),hb);
   acts.appendChild(hb);
  }
  if(acts.children.length) c.appendChild(acts);
@@ -1039,7 +1057,7 @@ function renderWorkshop(rows,flags){
  // c615b791 FINAL: SIX lifecycle tabs (Flags · To review · In progress · Verifying · Closed · Dismissed).
  // Flags = pre-ticket pending_followups; the rest bucket by skill_issues.status via wsStatusBucket.
  const B={flags:flags,toreview:[],inprogress:[],verifying:[],closed:[],dismissed:[]};
- for(const r of rows){ (B[wsStatusBucket(r.status)]).push(r); }  // safety net: unknown status -> To review (never invisible)
+ for(const r of rows){ (B[wsStatusBucket(r)]).push(r); }  // bf7eea06: pass the row so a claimed-open ticket buckets to In progress; unknown status -> To review (never invisible)
  // Urgency sort within each ticket bucket (issue 095c0edf): severity -> recurrence -> most-recent.
  // Flags (pre-ticket pending_followups) carry no severity/recurrence -> order them newest-first.
  for(const k of ['toreview','inprogress','verifying','closed','dismissed']) B[k].sort(wsUrgencyCmp);
@@ -1066,7 +1084,7 @@ function renderWorkshop(rows,flags){
    body.appendChild(el('p','sub','Search “'+WS_SEARCH.trim()+'” — '+total+' match'+(total===1?'':'es')+' across all tabs. Clear the box to return to the tabs.'));
    if(!total){ body.appendChild(el('div','allcaught','No ticket matches that # or title.')); return; }
    for(const r of mrows){
-    const bk=wsStatusBucket(r.status);
+    const bk=wsStatusBucket(r);
     const lbl=(WS_STAGES.find(([k])=>k===bk)||[null,bk])[1];
     body.appendChild(el('div','meta','in '+lbl));
     body.appendChild(bk==='toreview'?reviewCard(r,'toreview'):wsCard(r,bk));
@@ -1181,7 +1199,7 @@ function rvDismissBox(row){
 }
 function rvClaudePrompt(row){
  const t=(row.title||'').replace(/"/g,'');
- const base=WS_BOOT+'Work workshop issue '+(row.id||'')+' ("'+t+'") from the To review tab. ';
+ const base=WS_BOOT+'Work workshop issue '+(row.id||'')+' ("'+t+'") from the To review tab. As your FIRST action — the moment you start — mark it In progress so my board shows a session has it: call dash_workshop_claim(\''+(row.id||'')+'\') (idempotent; it moves the ticket from To review to In progress while you work it, and the DB clears the claim once the ticket advances). ';
  const prop=(row.runner_proposal&&typeof row.runner_proposal==='object')?row.runner_proposal:null;
  const hasProp=!!(prop&&prop.proposed_change!=null);
  if(hasProp&&row.review_state==='approved') return base+WS_APPLY;
