@@ -785,6 +785,22 @@ function wsStatusBucket(s){
  if(s==='dismissed') return 'dismissed';
  return 'toreview'; // safety net: an unrecognised status is never invisible
 }
+// Urgency ordering (issue 095c0edf, broker choice 2026-06-15): severity -> recurrence -> most-recent.
+let WS_SEARCH='';
+function wsSevRank(s){ return ({critical:4,high:3,medium:2,low:1})[s]||0; }
+function wsRecencyMs(row){
+ let m=0;
+ for(const c of [row.last_seen_at,row.updated_at,row.verifying_since,row.closed_at,row.created_at]){
+  if(!c) continue; const t=parseTs(c); const v=(t instanceof Date)?t.getTime():+t;
+  if(v&&!isNaN(v)&&v>m) m=v;
+ }
+ return m;
+}
+function wsUrgencyCmp(a,b){
+ const ds=wsSevRank(b.severity)-wsSevRank(a.severity); if(ds) return ds;       // 1) severity
+ const dr=(+b.recurrence_count||0)-(+a.recurrence_count||0); if(dr) return dr;  // 2) recurrence
+ return wsRecencyMs(b)-wsRecencyMs(a);                                          // 3) most-recent
+}
 // "seen again ×N · last <date>" indicator (status-aware dedup)
 function wsRecurrencePill(row){
  const n=+row.recurrence_count||0; if(n<=0) return null;
@@ -1024,58 +1040,92 @@ function renderWorkshop(rows,flags){
  // Flags = pre-ticket pending_followups; the rest bucket by skill_issues.status via wsStatusBucket.
  const B={flags:flags,toreview:[],inprogress:[],verifying:[],closed:[],dismissed:[]};
  for(const r of rows){ (B[wsStatusBucket(r.status)]).push(r); }  // safety net: unknown status -> To review (never invisible)
- let active=localStorage.getItem('fh-ws-tab');
- if(!WS_STAGES.some(([k])=>k===active)) active=null;
- if(!active) active=(WS_STAGES.find(([k])=>k!=='closed'&&k!=='dismissed'&&B[k].length)||['toreview'])[0];
- const tabs=el('div');tabs.style.cssText='display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:2px 0 10px;';
- for(const[k,label,hint]of WS_STAGES){
-  const t=el('button',null,label+' '+B[k].length);
-  t.title=hint;
-  t.style.cssText='flex:none;font-size:12px;padding:6px 12px;border-radius:999px;border:1px solid '+(k===active?'#1a1915':'#d3d1c7')+';background:'+(k===active?'#1a1915':'#fff')+';color:'+(k===active?'#fff':(B[k].length?'#1a1915':'#9a988f'))+';';
-  t.onclick=()=>{localStorage.setItem('fh-ws-tab',k);renderWorkshop(rows,flags);};
-  tabs.appendChild(t);
- }
- main.appendChild(tabs);
- // By-skill batch affordance (a3f7b7aa): work all of one skill's open tickets in one session.
- // a0296f78 (2026-06-12, broker decision): ACTIONABLE ONLY — count To review tickets, not
- // In progress / Verifying (those are in flight, not workable; a deployed batch awaiting
- // overnight evidence must not read as open work). Flags reach To review via the 2h bridge.
- const _act=(B.toreview||[]).slice();
- const _skm={};
- for(const r of _act){ const a=Array.isArray(r.skills)?r.skills:String(r.skills||'').split(', ').filter(Boolean); for(const sx of a){ if(!sx)continue; (_skm[sx]=_skm[sx]||[]).push(r); } }
- const _skn=Object.keys(_skm).filter(x=>_skm[x].length>1).sort((a,b)=>_skm[b].length-_skm[a].length);
- if(_skn.length){
-  const sw=el('div'); sw.style.cssText='margin:0 0 10px;';
-  const stg=el('button',null,'\u25b8 By skill \u2014 work a whole skill at once ('+_skn.length+')');
-  stg.style.cssText='font-size:12px;padding:5px 10px;border-radius:8px;border:1px dashed #c9c4f2;background:#fbfaf7;color:#3c3489;';
-  const _skOpen=localStorage.getItem('fh-ws-byskill-open')==='1';  // 961386ce: remember open/closed across re-renders so a live refresh updates the count in place
-  const sbody=el('div'); sbody.style.cssText='display:'+(_skOpen?'block':'none')+';margin-top:8px;';
-  stg.textContent=(_skOpen?'\u25be':'\u25b8')+' By skill \u2014 work a whole skill at once ('+_skn.length+')';
-  stg.onclick=()=>{const o=sbody.style.display!=='none';sbody.style.display=o?'none':'block';localStorage.setItem('fh-ws-byskill-open',o?'0':'1');stg.textContent=(o?'\u25b8':'\u25be')+' By skill \u2014 work a whole skill at once ('+_skn.length+')';};
-  for(const sx of _skn){
-   const rw=el('div'); rw.style.cssText='display:flex;align-items:center;gap:8px;padding:4px 0;';
-   rw.appendChild(el('span','sk',sx+' ('+_skm[sx].length+')'));
-   const bb=el('button',null,'Work all '+_skm[sx].length+' in Claude');
-   bb.style.cssText='font-size:12px;padding:4px 10px;border-radius:8px;border:1px solid #9fe1cb;color:#085041;background:#fff;';
-   bb.onclick=()=>copyPrompt(wsPromptSkillBatch(sx,_skm[sx]),bb);
-   rw.appendChild(bb); sbody.appendChild(rw);
+ // Urgency sort within each ticket bucket (issue 095c0edf): severity -> recurrence -> most-recent.
+ // Flags (pre-ticket pending_followups) carry no severity/recurrence -> order them newest-first.
+ for(const k of ['toreview','inprogress','verifying','closed','dismissed']) B[k].sort(wsUrgencyCmp);
+ B.flags.sort((a,b)=>wsRecencyMs(b)-wsRecencyMs(a));
+
+ // Ticket search (issue 095c0edf): find a ticket by # (id prefix) or title, across ALL tabs.
+ const sbx=el('div'); sbx.style.cssText='margin:0 0 10px;';
+ const si=document.createElement('input');
+ si.type='search'; si.placeholder='Search ticket # or title…'; si.value=WS_SEARCH||'';
+ si.autocapitalize='off'; si.autocomplete='off'; si.spellcheck=false;
+ si.setAttribute('aria-label','Search workshop tickets by number or title');
+ si.style.cssText='width:100%;font-size:16px;padding:10px 12px;border:1px solid #d3d1c7;border-radius:10px;background:#fff;color:#1a1915;box-sizing:border-box;';
+ sbx.appendChild(si); main.appendChild(sbx);
+ const body=el('div'); main.appendChild(body);
+
+ function paintBody(){
+  body.textContent='';
+  const q=(WS_SEARCH||'').trim().toLowerCase();
+  if(q){
+   const norm=s=>String(s==null?'':s).toLowerCase();
+   const mrows=rows.filter(r=>norm(r.id).includes(q)||norm(r.title).includes(q)).sort(wsUrgencyCmp);
+   const mflags=flags.filter(p=>norm(p.id).includes(q)||norm(p.kind).includes(q)||norm(p.payload).includes(q));
+   const total=mrows.length+mflags.length;
+   body.appendChild(el('p','sub','Search “'+WS_SEARCH.trim()+'” — '+total+' match'+(total===1?'':'es')+' across all tabs. Clear the box to return to the tabs.'));
+   if(!total){ body.appendChild(el('div','allcaught','No ticket matches that # or title.')); return; }
+   for(const r of mrows){
+    const bk=wsStatusBucket(r.status);
+    const lbl=(WS_STAGES.find(([k])=>k===bk)||[null,bk])[1];
+    body.appendChild(el('div','meta','in '+lbl));
+    body.appendChild(bk==='toreview'?reviewCard(r,'toreview'):wsCard(r,bk));
+   }
+   for(const p of mflags){ body.appendChild(el('div','meta','in Flags')); body.appendChild(wsFlagCard(p)); }
+   return;
   }
-  sw.appendChild(stg); sw.appendChild(sbody); main.appendChild(sw);
+  let active=localStorage.getItem('fh-ws-tab');
+  if(!WS_STAGES.some(([k])=>k===active)) active=null;
+  if(!active) active=(WS_STAGES.find(([k])=>k!=='closed'&&k!=='dismissed'&&B[k].length)||['toreview'])[0];
+  const tabs=el('div');tabs.style.cssText='display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:2px 0 10px;';
+  for(const[k,label,hint]of WS_STAGES){
+   const t=el('button',null,label+' '+B[k].length);
+   t.title=hint;
+   t.style.cssText='flex:none;font-size:12px;padding:6px 12px;border-radius:999px;border:1px solid '+(k===active?'#1a1915':'#d3d1c7')+';background:'+(k===active?'#1a1915':'#fff')+';color:'+(k===active?'#fff':(B[k].length?'#1a1915':'#9a988f'))+';';
+   t.onclick=()=>{localStorage.setItem('fh-ws-tab',k);paintBody();};
+   tabs.appendChild(t);
+  }
+  body.appendChild(tabs);
+  const _act=(B.toreview||[]).slice();
+  const _skm={};
+  for(const r of _act){ const a=Array.isArray(r.skills)?r.skills:String(r.skills||'').split(', ').filter(Boolean); for(const sx of a){ if(!sx)continue; (_skm[sx]=_skm[sx]||[]).push(r); } }
+  const _skn=Object.keys(_skm).filter(x=>_skm[x].length>1).sort((a,b)=>_skm[b].length-_skm[a].length);
+  if(_skn.length){
+   const sw=el('div'); sw.style.cssText='margin:0 0 10px;';
+   const _skOpen=localStorage.getItem('fh-ws-byskill-open')==='1';
+   const stg=el('button',null,(_skOpen?'▾':'▸')+' By skill — work a whole skill at once ('+_skn.length+')');
+   stg.style.cssText='font-size:12px;padding:5px 10px;border-radius:8px;border:1px dashed #c9c4f2;background:#fbfaf7;color:#3c3489;';
+   const sbody=el('div'); sbody.style.cssText='display:'+(_skOpen?'block':'none')+';margin-top:8px;';
+   stg.onclick=()=>{const o=sbody.style.display!=='none';sbody.style.display=o?'none':'block';localStorage.setItem('fh-ws-byskill-open',o?'0':'1');stg.textContent=(o?'▸':'▾')+' By skill — work a whole skill at once ('+_skn.length+')';};
+   for(const sx of _skn){
+    const rw=el('div'); rw.style.cssText='display:flex;align-items:center;gap:8px;padding:4px 0;';
+    rw.appendChild(el('span','sk',sx+' ('+_skm[sx].length+')'));
+    const bb=el('button',null,'Work all '+_skm[sx].length+' in Claude');
+    bb.style.cssText='font-size:12px;padding:4px 10px;border-radius:8px;border:1px solid #9fe1cb;color:#085041;background:#fff;';
+    bb.onclick=()=>copyPrompt(wsPromptSkillBatch(sx,_skm[sx]),bb);
+    rw.appendChild(bb); sbody.appendChild(rw);
+   }
+   sw.appendChild(stg); sw.appendChild(sbody); body.appendChild(sw);
+  }
+  const hint=WS_STAGES.find(([k])=>k===active);
+  body.appendChild(el('p','sub',hint[2]));
+  const cur=B[active];
+  const EMPTY={flags:'No unhandled system flags.',toreview:'Nothing to triage — To review is clear.',inprogress:'Nothing being worked right now.',verifying:'Nothing awaiting evidence.',closed:'Nothing closed yet.',dismissed:'Nothing dismissed.'};
+  if(cur.length===0){
+   body.appendChild(el('div','allcaught',EMPTY[active]||'Nothing here.'));
+  }else if(active==='flags'){
+   for(const p of cur) body.appendChild(wsFlagCard(p));
+  }else if(active==='toreview'){
+   for(const r of cur) body.appendChild(reviewCard(r,'toreview'));
+  }else{
+   for(const r of cur) body.appendChild(wsCard(r,active));
+  }
+  body.appendChild(el('p','sub','Source: skill_issues + the system-flag bridge (live). Flags auto-promote to To review every 2h. Close needs prevention + the 5×3 review + evidence (a clean run, or your Confirm-working tap). Buttons copy ready-made requests for Claude.'));
  }
- const hint=WS_STAGES.find(([k])=>k===active);
- main.appendChild(el('p','sub',hint[2]));
- const cur=B[active];
- const EMPTY={flags:'No unhandled system flags.',toreview:'Nothing to triage — To review is clear.',inprogress:'Nothing being worked right now.',verifying:'Nothing awaiting evidence.',closed:'Nothing closed yet.',dismissed:'Nothing dismissed.'};
- if(cur.length===0){
-  main.appendChild(el('div','allcaught',EMPTY[active]||'Nothing here.'));
- }else if(active==='flags'){
-  for(const p of cur) main.appendChild(wsFlagCard(p));
- }else if(active==='toreview'){
-  for(const r of cur) main.appendChild(reviewCard(r,'toreview'));   // bare-or-proposal review card (Phase C, reused)
- }else{
-  for(const r of cur) main.appendChild(wsCard(r,active));           // In progress / Verifying / Closed / Dismissed
- }
- main.appendChild(el('p','sub','Source: skill_issues + the system-flag bridge (live). Flags auto-promote to To review every 2h. Close needs prevention + the 5×3 review + evidence (a clean run, or your Confirm-working tap). Buttons copy ready-made requests for Claude.'));
+
+ si.oninput=()=>{ WS_SEARCH=si.value; paintBody(); };
+ paintBody();
+
  const working=B.toreview.length+B.inprogress.length+B.verifying.length;
  renderWorkshop._banner=[working?(working+' in flight · '+B.closed.length+' closed'):('all clear · '+B.closed.length+' closed'),working?'a':'g'];
  setBanner(...renderWorkshop._banner);
