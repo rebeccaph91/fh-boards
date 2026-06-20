@@ -1297,6 +1297,15 @@ const STATC={'active':['#D9EAD3','#1d5a32'],'exclusive':['#E4D9F0','#4a3270'],'s
 const norm=s=>String(s||'').trim().toLowerCase();
 const money=s=>String(s||'').replace(/\.00$/,'');
 const unesc=s=>String(s).replace(/\\([\\`*_{}\[\]()#+\-.!|~$])/g,'$1').replace(/\\$/,'');
+/* ---- per-listing suppress (issue 2bff9bba) ----
+ * Hide a tracked listing / comp on a client's file. Pure VIEW-LAYER over the read-only
+ * snapshot — never mutates the Sheet, so a reappearing listing is "fully populated" for free.
+ * Stable key = mls if present else normalized address. Reappear when the listing's
+ * Communications (Conversation notes) cell changes — that is "comes up again in communications".
+ * (function declarations on purpose: callable as window globals from the W10 jsdom harness.) */
+function cyrb53(str,seed){seed=seed||0;let h1=0xdeadbeef^seed,h2=0x41c6ce57^seed;for(let i=0,ch;i<str.length;i++){ch=str.charCodeAt(i);h1=Math.imul(h1^ch,2654435761);h2=Math.imul(h2^ch,1597334677);}h1=Math.imul(h1^(h1>>>16),2246822507);h1^=Math.imul(h2^(h2>>>13),3266489909);h2=Math.imul(h2^(h2>>>16),2246822507);h2^=Math.imul(h1^(h1>>>13),3266489909);return (4294967296*(2097151&h2)+(h1>>>0)).toString(16);}
+function listingKey(o){const m=(gv(o,'mls')||'').trim().toLowerCase();return m?('mls:'+m):('addr:'+norm(o['address']||''));}
+function listingActivityFp(o){return cyrb53(norm(o['communications']||'').replace(/\s+/g,' '));}
 function parseTables(md){
  const tables=[];let cur=null;
  for(const ln of md.split('\n')){
@@ -1334,7 +1343,7 @@ function expander(box,label,text){
  b.onclick=()=>{if(q){q.remove();q=null;b.textContent=label;return;}q=el('div','quote',text);b.insertAdjacentElement('afterend',q);b.textContent='Hide '+label.toLowerCase();};
  box.appendChild(b);box.appendChild(document.createTextNode(' '));
 }
-function listingCard(o){
+function listingCard(o,sctx,isSuppressed){
  const c=el('div','cfcard');
  const r1=el('div','row1');
  r1.appendChild(el('span','addr',o['address']||'(no address)'));
@@ -1359,6 +1368,19 @@ function listingCard(o){
  expander(acts,'History',o['history']);
  expander(acts,'Showing',o['showing']);
  if(acts.children.length)c.appendChild(acts);
+ if(sctx){
+  const key=listingKey(o);
+  const sb=el('button','lk',isSuppressed?'↩ Restore to file':'Suppress from file');
+  sb.onclick=async()=>{
+   sb.disabled=true;sb.textContent=isSuppressed?'Restoring…':'Suppressing…';
+   try{
+    if(isSuppressed) await rpc('dash_listing_unsuppress',{p_client_id:sctx.clientId,p_listing_key:key});
+    else await rpc('dash_listing_suppress',{p_client_id:sctx.clientId,p_client_type:sctx.clientType,p_listing_key:key,p_mls:gv(o,'mls')||'',p_address:o['address']||'',p_fp:listingActivityFp(o)});
+   }catch(e){}
+   if(sctx.refresh)sctx.refresh();
+  };
+  const ar=el('div');ar.style.marginTop='6px';ar.appendChild(sb);c.appendChild(ar);
+ }
  return c;
 }
 function heroCard(o){
@@ -1380,14 +1402,34 @@ function heroCard(o){
  if(acts.children.length)c.appendChild(acts);
  return c;
 }
-function renderListings(t,mount,isSeller){
+function renderListings(t,mount,isSeller,sctx){
  const rows=obj(t).filter(o=>Object.values(o).some(v=>String(v).trim()!==''));
  if(!rows.length)return;
  const subj=rows.filter(o=>norm(o['source'])==='subject');
  const rest=rows.filter(o=>norm(o['source'])!=='subject');
- if(isSeller&&subj.length){subj.forEach(o=>mount.appendChild(heroCard(o)));mount.appendChild(el('h2',null,'Comparables ('+rest.length+')'));}
- else mount.appendChild(el('h2',null,(isSeller?'Comparables':'Tracked listings')+' ('+rest.length+')'));
- rest.forEach(o=>mount.appendChild(listingCard(o)));
+ const supp=(sctx&&sctx.supp)||{};
+ const shown=[],hidden=[],revive=[];
+ rest.forEach(o=>{
+  const key=listingKey(o);
+  if(Object.prototype.hasOwnProperty.call(supp,key)){
+   if(supp[key]===listingActivityFp(o)){hidden.push(o);return;}   // still suppressed — no new communications
+   revive.push(key);                                              // came up again in communications -> auto-restore + show
+  }
+  shown.push(o);
+ });
+ if(isSeller&&subj.length){subj.forEach(o=>mount.appendChild(heroCard(o)));mount.appendChild(el('h2',null,'Comparables ('+shown.length+')'));}
+ else mount.appendChild(el('h2',null,(isSeller?'Comparables':'Tracked listings')+' ('+shown.length+')'));
+ shown.forEach(o=>mount.appendChild(listingCard(o,sctx)));
+ if(hidden.length){
+  const tog=el('button','lk','Suppressed listings ('+hidden.length+') — show');
+  let box=null;
+  tog.onclick=()=>{
+   if(box){box.remove();box=null;tog.textContent='Suppressed listings ('+hidden.length+') — show';return;}
+   box=el('div');hidden.forEach(o=>box.appendChild(listingCard(o,sctx,true)));tog.insertAdjacentElement('afterend',box);tog.textContent='Hide suppressed ('+hidden.length+')';
+  };
+  mount.appendChild(tog);
+ }
+ if(sctx&&revive.length){revive.forEach(key=>{try{rpc('dash_listing_unsuppress',{p_client_id:sctx.clientId,p_listing_key:key});}catch(e){}});}
 }
 function renderShowings(t,mount){
  const rows=obj(t).filter(o=>gv(o,'date'));
@@ -1592,7 +1634,10 @@ async function openClient(c,btn,detail){
  detail.textContent='';
  detail.appendChild(el('div','note','Loading '+c.display_name+'…'));
  try{
-  const row=await rpc('dash_client_file',{p_client:c.client_id});
+  const [row,suppArr]=await Promise.all([
+   rpc('dash_client_file',{p_client:c.client_id}),
+   rpc('dash_listing_suppressions',{p_client_id:c.client_id}).catch(()=>[])
+  ]);
   detail.textContent='';
   await cfNoteBox(c,detail);   // notes work even before the first snapshot exists
   if(!row||!row.workbook_md){detail.appendChild(el('div','note','No snapshot of '+c.display_name+'’s workbook yet — the file view appears after the next 10 PM run. Notes you log above still reach the file.'));return;}
@@ -1601,7 +1646,9 @@ async function openClient(c,btn,detail){
   const isSeller=c.client_type==='seller';
   let profN=0;
   for(const t of tables){if(cfClassify(t)==='profile'){renderProfileKv(t,detail,profN===0?(isSeller?'Listing file':'Buyer profile'):null);profN++;}}
-  for(const t of tables){if(cfClassify(t)==='listings')renderListings(t,detail,isSeller);}
+  const suppMap={};(suppArr||[]).forEach(s=>{suppMap[s.listing_key]=s.activity_fp;});
+  const sctx={clientId:c.client_id,clientType:c.client_type,supp:suppMap,refresh:()=>openClient(c,btn,detail)};
+  for(const t of tables){if(cfClassify(t)==='listings')renderListings(t,detail,isSeller,sctx);}
   for(const t of tables){const k=cfClassify(t);
    if(k==='showings')renderShowings(t,detail);
    else if(k==='schedule')renderScheduleTl(t,detail);
@@ -1719,10 +1766,20 @@ function renderHealth(HEALTH_SKILLS,runs,pfs,schedOk,mirror,HB){
    const hb=HB[(sk.id||'').replace(/-(1am|nightly)$/,'')];
    const okAt=hb&&hb.ok_at?parseTs(hb.ok_at):null;
    const okAgeH=okAt?(Date.now()-okAt.getTime())/3600000:Infinity;
+   // 8fac606a liveness: last_run_at advances on EVERY run regardless of status (eaffab7c), so it
+   // catches a producer that DIED while last_run_status was frozen at a non-success value ('partial').
+   // liveness = most-recent of last_run_at and last_successful_run_at; liveStale = POSITIVE evidence
+   // (>=1 real timestamp) that no run has happened within cadence. No timestamps (heartbeat-only
+   // producers, or pre-RPC-deploy) => NOT stale — never fabricate a death from zero evidence.
+   const liveAt=hb&&hb.last_run_at?parseTs(hb.last_run_at):null;
+   const liveMs=Math.max(liveAt?liveAt.getTime():0, okAt?okAt.getTime():0);
+   const liveAgeH=liveMs>0?(Date.now()-liveMs)/3600000:Infinity;
+   const liveStale=liveMs>0&&liveAgeH>sk.maxGapH;
    if(hb&&(okAt||hb.last_run_status)){
     due++;
     const quiet=hb.excluded_from_alarms===true;
     if(hb.last_run_status==='success'&&okAgeH<=sk.maxGapH){p=pill('g','ran clean');kindCol='#1d9e75';green++;body.appendChild(el('div','nt','Heartbeat: succeeded '+torTime(okAt)+(okAgeH>20?' ('+fmtDay(okAt)+')':'')));}
+    else if(hb.last_run_status&&hb.last_run_status!=='success'&&liveStale&&!quiet){p=pill('r','stalled');kindCol='#e24b4a';attention++;body.appendChild(el('div','nt','No run in '+Math.round(liveAgeH)+'h (last status '+hb.last_run_status+') — beyond its ~'+Math.round(sk.maxGapH)+'h cadence, so the producer has stalled'+(okAt?'; last clean run '+fmtDay(okAt)+' '+torTime(okAt):'')));}
     else if(hb.last_run_status&&hb.last_run_status!=='success'){p=pill(quiet?'a':'r',hb.last_run_status);kindCol=quiet?'#ef9f27':'#e24b4a';if(!quiet)attention++;body.appendChild(el('div','nt','Heartbeat reports '+hb.last_run_status+(okAt?' — last clean run '+fmtDay(okAt)+' '+torTime(okAt):'')));}
     else if(okAt&&okAgeH>sk.maxGapH){if(quiet){p=pill('a','gap (expected)');kindCol='#ef9f27';body.appendChild(el('div','nt','Last clean heartbeat '+fmtDay(okAt)+' '+torTime(okAt)+' — gaps are expected for this task (Mac asleep)'));}else{p=pill('r','stalled');kindCol='#e24b4a';attention++;body.appendChild(el('div','nt','Last clean heartbeat '+fmtDay(okAt)+' '+torTime(okAt)+' — '+Math.round(okAgeH)+'h ago, beyond its ~'+Math.round(sk.maxGapH)+'h cadence'));}}
     else{p=pill('n','heartbeat incomplete');body.appendChild(el('div','nt','Heartbeat row exists but carries no status/timestamp yet — expecting a report on its next run'));}
