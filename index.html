@@ -255,6 +255,16 @@ function wsPromptSkillBatch(skill,rows){
  // d930c249: claim FIRST, ahead of WS_BOOT, via the self-contained wsClaimMany (so the board moves at second 1, before the mounts/ritual read).
  return wsClaimMany(ids)+WS_BOOT+'Work ALL '+((rows||[]).length)+' open workshop tickets for the skill "'+skill+'" as ONE batch.\n'+list+'\nFix them together in a single pass — one set of source edits to '+skill+', one W10 gate run, one deploy that covers the batch. Keep each ticket\'s own row; log a full 5×3 review per ticket BEFORE deploy (one independent cold-subagent review pass can cover the whole batch); the DB deploy gate blocks any ticket reaching deployed without its 5×3. Follow Memory/skill-workshop-ritual.md (review-then-deploy).';
 }
+// a3fac04a: AD-HOC, broker-picked multi-select batch (the manual counterpart to wsPromptSkillBatch's
+// automatic skill-grouping). The selected tickets were HAND-picked on the To review tab and may NOT
+// share a skill, so the wording groups fixes by shared skill/root-cause where it applies and keeps the
+// per-ticket ritual + per-ticket 5×3 otherwise. Claim-stage builder: leads with the claim, then WS_BOOT.
+function wsPromptBatch(rows){
+ var arr=(rows||[]).filter(Boolean);
+ var list=arr.map(function(r){return '• '+String(r.id||'').slice(0,8)+' ['+(r.status||'')+'] '+String(r.title||'').replace(/"/g,'');}).join('\n');
+ var ids=arr.map(function(r){return String(r.id||'');}).filter(Boolean);
+ return wsClaimMany(ids)+WS_BOOT+'Workshop these '+arr.length+' tickets I picked to workshop together on the To review tab, as ONE batch:\n'+list+'\nWork them in a single session. They were hand-picked and may NOT share a skill: where any of them DO share a skill or root cause, fix those together (one set of source edits, one W10 gate run, one deploy that covers them); tickets that are unrelated each get their own fix. Keep each ticket\'s own skill_issues row and run the full workshop ritual per ticket — five lenses → fix → prevention → a full 5×3 review BEFORE deploy (one independent cold-subagent review pass may cover the whole batch); the DB deploy gate blocks any ticket reaching deployed without its own 5×3 + prevention. Follow Memory/skill-workshop-ritual.md (review-then-deploy).';
+}
 const WS_ROUNDS='Log each lens’s round in review_log as a structured entry {lens, round, reviewer, independent, at} (lenses: ai_swe, ml, db, version_control, devops); use cold subagents for at least one independent round per lens, with at least 2 distinct reviewers overall. Never hand-set review_rounds — it is derived from the weakest lens. The FULL 5×3 must be complete BEFORE deploy — review-then-deploy is mandatory (issue 291d8d01) and the DB deploy gate (trg_skill_issues_deploy_gate) blocks the transition into deployed until all 15 passes + prevention are logged.';
 const WS_APPLY='I approved its runner-proposed fix (review_state=approved). Apply it ONLY via the Phase D attended-apply path — FIX CLAUDE/apply/attended-apply.js: apply_load_proposal → apply_open (audit-first) → write the change → secret-scan → issue-id-tagged commit → apply_mark_applied → apply_begin_gate → run the W10 gate → apply_record_gate bound to THIS diff. The runner never applies — you do, attended. A deploy-class change needs my typed CONFIRM even after approval. On CLEAN the issue advances to fix_staged (Verifying) — do NOT deploy yet; on FAILED revert per the apply ledger. Complete the FULL 5×3 BEFORE any deploy (the DB deploy gate enforces it). '+WS_ROUNDS;
 function wsPromptFlag(p){
@@ -823,6 +833,30 @@ function wsStatusBucket(r){
 }
 // Urgency ordering (issue 095c0edf, broker choice 2026-06-15): severity -> recurrence -> most-recent.
 let WS_SEARCH='';
+// a3fac04a: ad-hoc multi-select — "check off multiple tickets to be workshopped together".
+// WS_SEL holds the picked To-review ticket ids; WS_TOREVIEW is the current To-review set so the
+// selection bar (and prune) only ever counts ids that are still actionable. View-layer only.
+let WS_SEL=new Set();
+let WS_TOREVIEW=[];
+function wsSelectedRows(){ return WS_TOREVIEW.filter(r=>WS_SEL.has(r.id)); }
+// Repaint the floating "N selected" bar from WS_SEL ∩ WS_TOREVIEW. No-ops if the bar isn't mounted
+// (e.g. during a search render) so a checkbox toggle there still updates WS_SEL harmlessly.
+function wsRenderSelBar(){
+ const bar=document.getElementById('ws-selbar');
+ if(!bar) return;
+ bar.textContent='';
+ const sel=wsSelectedRows();
+ if(!sel.length){ bar.style.display='none'; return; }
+ bar.style.display='flex';
+ bar.appendChild(el('span','sub',sel.length+' selected'));
+ const go=el('button',null,'Workshop '+sel.length+' selected together');
+ go.style.cssText='font-size:12px;padding:5px 10px;border-radius:8px;border:1px solid #9fe1cb;color:#085041;background:#fff;';
+ go.onclick=()=>copyPrompt(wsPromptBatch(sel),go);
+ const clr=el('button',null,'Clear');
+ clr.style.cssText='font-size:12px;padding:5px 10px;border-radius:8px;border:1px solid #d3d1c7;color:#5f5e5a;background:#fff;';
+ clr.onclick=()=>{ WS_SEL.clear(); document.querySelectorAll('input.ws-selcb').forEach(x=>{x.checked=false;}); wsRenderSelBar(); };
+ bar.appendChild(go); bar.appendChild(clr);
+}
 function wsSevRank(s){ return ({critical:4,high:3,medium:2,low:1})[s]||0; }
 function wsRecencyMs(row){
  let m=0;
@@ -1085,6 +1119,11 @@ function renderWorkshop(rows,flags){
  for(const k of ['toreview','inprogress','verifying','closed','dismissed']) B[k].sort(wsUrgencyCmp);
  B.flags.sort((a,b)=>wsRecencyMs(b)-wsRecencyMs(a));
 
+ // a3fac04a: track the current To-review set for ad-hoc batch selection; prune any picked id that
+ // is no longer in To review (worked / advanced since the last render) so the count can't go stale.
+ WS_TOREVIEW=B.toreview.slice();
+ { const live=new Set(WS_TOREVIEW.map(r=>r.id)); for(const id of Array.from(WS_SEL)) if(!live.has(id)) WS_SEL.delete(id); }
+
  // Ticket search (issue 095c0edf): find a ticket by # (id prefix) or title, across ALL tabs.
  const sbx=el('div'); sbx.style.cssText='margin:0 0 10px;';
  const si=document.createElement('input');
@@ -1156,7 +1195,12 @@ function renderWorkshop(rows,flags){
   }else if(active==='flags'){
    for(const p of cur) body.appendChild(wsFlagCard(p));
   }else if(active==='toreview'){
+   // a3fac04a: floating selection bar for the ad-hoc "workshop together" batch; hidden until a card is checked.
+   const selbar=el('div'); selbar.id='ws-selbar';
+   selbar.style.cssText='display:none;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 10px;padding:8px 10px;border:1px solid #9fe1cb;border-radius:10px;background:#f3fbf7;';
+   body.appendChild(selbar);
    for(const r of cur) body.appendChild(reviewCard(r,'toreview'));
+   wsRenderSelBar(); // reflect any selection carried over from a prior render
   }else{
    for(const r of cur) body.appendChild(wsCard(r,active));
   }
@@ -1231,6 +1275,18 @@ function rvClaudePrompt(row){
 }
 function reviewCard(row,bucket){
  const c=el('div','item');
+ // a3fac04a: ad-hoc multi-select checkbox — only in the To review bucket (this card is also reused by
+ // the cross-tab search list; the checkbox there just toggles WS_SEL, the bar shows once you clear search).
+ if(bucket==='toreview'){
+  const selrow=el('label','ws-selwrap');
+  selrow.style.cssText='display:flex;align-items:center;gap:8px;margin:0 0 8px;font-size:12px;color:#5f5e5a;cursor:pointer;';
+  const cb=document.createElement('input'); cb.type='checkbox'; cb.className='ws-selcb';
+  cb.checked=WS_SEL.has(row.id);
+  cb.setAttribute('aria-label','Select this ticket to workshop together with others');
+  cb.onchange=()=>{ if(cb.checked)WS_SEL.add(row.id); else WS_SEL.delete(row.id); wsRenderSelBar(); };
+  selrow.appendChild(cb); selrow.appendChild(el('span',null,'Select to workshop together'));
+  c.appendChild(selrow);
+ }
  const prop=(row.runner_proposal&&typeof row.runner_proposal==='object')?row.runner_proposal:null;
  // derive has_proposal client-side (dash_skill_issues doesn't return the server's derived boolean):
  // mirror dash_review_queue / dash_approve_fix — proposed_change must be present.
