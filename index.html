@@ -1329,19 +1329,33 @@ function activityCanon(s){
   .replace(/[   ]/g,' ')                              // nbsp variants
   .replace(/\b\d{4}-\d{2}-\d{2}t\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?z?\b/g,' ')  // ISO datetime
   .replace(/\b\d{4}-\d{1,2}-\d{1,2}\b/g,' ')                         // ISO date
+  .replace(/\b\d{4}\/\d{1,2}\/\d{1,2}\b/g,' ')                       // slash-ISO 2026/06/05 (2de2756a) — 4-digit leading year makes this unambiguously a date (no fraction/ratio collision), so it is safe to strip
   .replace(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g,' ')                     // M/D/Y or D/M/Y
   .replace(/\b\d{1,2}:\d{2}\s*(?:am|pm)?\b/g,' ')                    // clock time
-  .replace(/\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?,?(?:\s+\d{4})?\b/g,' ')  // Mon D[, YYYY]
+  .replace(/\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+\d{1,2}(?:st|nd|rd|th)?,?(?:\s+\d{4})?\b/g,' ')  // Mon D[, YYYY] — EXACT month enum (2de2756a cold-review D2): the old greedy [a-z]* let "dec"/"mar" swallow "declined 3"/"marched 5" -> ate a content word toward permanent-hide; exact alternations + \b fix that
+  .replace(/\b(?:0?[1-9]|[12]\d|3[01])(?:st|nd|rd|th)?\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{4}\b/g,' ')  // day-first WITH mandatory year 5 Jun 2026 (2de2756a) — the trailing \d{4} disambiguates a real date from content like "5 march madness" / "2 october closing"; bare "5 Jun" (no year) is INTENTIONALLY left un-stripped (ambiguous -> stripping it would risk the permanent-hide direction; un-stripped = safe reappear)
   .replace(/\b\d{1,2}(?:st|nd|rd|th)\b/g,' ')                        // bare ordinals
   .replace(/\b\d+\s+(?:day|days|hour|hours|week|weeks|minute|minutes|month|months|yr|yrs|year|years)\s+ago\b/g,' ')  // relative
   .replace(/[^0-9a-z\s]/g,' ')                                       // remaining punctuation / escape residue
   .replace(/\s+/g,' ').trim();
 }
-// Residuals (cold-review, tracked in low ticket 2de2756a): activityCanon does NOT strip slash-ISO
-// (2026/06/05), no-year slash (6/5), or day-first (5 Jun) dates — a pipeline switch INTO those flips
-// the fp -> a spurious REAPPEAR (the broker-preferred SAFE direction). And an appended entry whose
-// ONLY new content is a date/time (no new word token) canonicalizes identically and stays hidden —
-// inherent to date-stripping, unreachable with real notes (which carry an agent/action/feedback word).
+// Date-strip completeness (ticket 2de2756a, 2026-06-21): of the three forms two cold reviewers of 141eab7b
+// flagged as un-stripped (slash-ISO 2026/06/05, no-year slash 6/5, day-first 5 Jun), only the UNAMBIGUOUS
+// ones are now stripped, because date-stripping is the DANGEROUS (permanent-hide) direction and bare
+// numeric/short forms collide with real listing content:
+//   - slash-ISO 2026/06/05 -> STRIPPED (4-digit leading year, no content collision).
+//   - day-first WITH a trailing year "5 Jun 2026" -> STRIPPED (the \d{4} disambiguates it from "5 march madness").
+//   - no-year slash "6/5" -> DELIBERATELY NOT STRIPPED: indistinguishable from a fraction/score/ratio
+//     (1/2 bath, 3/4 acre, 8/10, 28/30, 24/7) — stripping it would eat genuine content and risk the
+//     permanent-hide direction. Leaving it un-stripped means a pipeline re-stamp into "6/5" merely flips the
+//     fp -> a spurious REAPPEAR, the broker-preferred SAFE direction (5x3 cold-review round 3, both reviewers).
+//   - bare day-first "5 Jun" (no year) -> DELIBERATELY NOT STRIPPED for the same ambiguity ("5 march madness").
+// Same review also fixed the PRE-EXISTING greedy [a-z]* on the Mon-D branch (was eating "declined 3"/"marched 5").
+// All changes keep fp at v2 ("2:") (a v3 bump would force-reappear EVERY suppression; this disturbs only rows
+// whose stored fp covered slash-ISO / year-bearing day-first text — a one-time safe reappear, like the v1->v2 drain).
+// STILL ACCEPTED (inherent to date-stripping): an appended entry whose ONLY new content is a date/time (no new
+// word token) canonicalizes identically and stays hidden — unreachable with real notes (which carry an
+// agent/action/feedback word).
 function _fpV1(o){return cyrb53(norm(gv(o,'communication')||'').replace(/\s+/g,' ')+'\u0001'+norm(gv(o,'showing')||'').replace(/\s+/g,' '));}  // FROZEN pre-141eab7b algorithm for legacy bare-hex rows
 function listingActivityFp(o){return '2:'+cyrb53(activityCanon(gv(o,'communication'))+'\u0001'+activityCanon(gv(o,'showing')));}  // gv (defensive substring) not o['communications'] — survives a header rename (cold-review ml); '2:' = hardened v2 fp
 // True when the stored fp still matches the listing's current activity. Routes by version prefix:
