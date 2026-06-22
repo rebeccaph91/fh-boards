@@ -218,6 +218,44 @@ function copyPrompt(t,b){
  const _rm=x.remove.bind(x);x.remove=()=>{lbl.remove();_rm();};
  try{if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(t).catch(()=>{lbl.textContent='Copy this and paste it into a Claude chat on your computer:';});}catch(e){}
 }
+/* ---- Web Push (issue a18f9eae) ----------------------------------------------
+   Browser notifications for new Updates / Follow-ups / Workshop items. The VAPID
+   PUBLIC key is safe to embed (public by design, like SBKEY); the matching PRIVATE
+   key lives ONLY as a server secret and never appears here. iOS Safari delivers web
+   push ONLY to a Home-Screen-installed PWA (>=16.4) via the service worker -- there is
+   no foreground Notification on iOS -- so the Settings card feature-detects and tells
+   the user to "Add to Home Screen" when that is what is missing. Client only stores its
+   own subscription (dash_push_subscribe) and renders pushes (sw.js); the server decides
+   what is new (dispatcher = issues 0a3ea2f5 + 52a605d0). */
+const VAPID_PUBLIC='REPLACE_AT_DEPLOY__VAPID_PUBLIC_KEY'; // substituted at deploy; matching private key = server secret only
+const PUSH_SUPPORTED=('serviceWorker' in navigator)&&('PushManager' in window)&&('Notification' in window);
+const PUSH_CONFIGURED=PUSH_SUPPORTED&&typeof VAPID_PUBLIC==='string'&&VAPID_PUBLIC.indexOf('REPLACE_AT_DEPLOY')!==0&&VAPID_PUBLIC.length>20; // false until the real public key is substituted at deploy
+function urlB64ToU8(s){
+ const pad='='.repeat((4-s.length%4)%4);
+ const b64=(s+pad).replace(/-/g,'+').replace(/_/g,'/');
+ const raw=atob(b64);const out=new Uint8Array(raw.length);
+ for(let i=0;i<raw.length;i++)out[i]=raw.charCodeAt(i);
+ return out;
+}
+let _swReg=null;
+async function pushReg(){ if(_swReg)return _swReg; if(!PUSH_SUPPORTED)return null;
+ _swReg=await navigator.serviceWorker.register('sw.js'); return _swReg; }
+async function pushCurrent(){ const r=await pushReg(); if(!r)return null; return await r.pushManager.getSubscription(); }
+async function pushSubscribe(){
+ const r=await pushReg(); if(!r) throw new Error('unsupported');
+ if(!PUSH_CONFIGURED) throw new Error('not-configured');
+ const perm=await Notification.requestPermission();
+ if(perm!=='granted') throw new Error('permission-'+perm);
+ let sub=await r.pushManager.getSubscription();
+ if(!sub) sub=await r.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlB64ToU8(VAPID_PUBLIC)});
+ const j=sub.toJSON(); j.ua=navigator.userAgent;
+ await rpc('dash_push_subscribe',{p_sub:j});
+ return sub;
+}
+async function pushUnsubscribe(){
+ const sub=await pushCurrent();
+ if(sub){ try{await rpc('dash_push_unsubscribe',{p_endpoint:sub.endpoint});}catch(e){} try{await sub.unsubscribe();}catch(e){} }
+}
 /* ---- Workshop trigger-prompt builders (issue 93fc542a) ----
    Fresh Claude sessions boot COLD: no folder mounts, no credentials, no ritual
    context (Memory/cold-start-triggers.md). Every workshop copy-to-Claude
@@ -323,10 +361,13 @@ document.getElementById('refresh').onclick=()=>{loaded[current]=true;LOADERS[cur
 // 961386ce: when the app returns to the foreground (e.g. after working a By-skill batch in
 // Claude on the computer) re-fetch the active view so counts reflect reality without a manual refresh.
 document.addEventListener('visibilitychange',()=>{ if(document.hidden) return; if(document.getElementById('app').classList.contains('hidden')) return; if(LOADERS[current]) LOADERS[current](); });
+// a18f9eae: a push notification deep-links via #hash; route it in-app (the boot-time hash read in showApp only fires on a cold load)
+window.addEventListener('hashchange',()=>{ if(document.getElementById('app').classList.contains('hidden')) return; const h=(location.hash||'').replace('#',''); const v=['updates','clients','followups','workshop','health'].includes(h)?h:(h==='review'?'workshop':null); if(v&&v!==current) show(v); });
 
 /* ============ auth ============ */
 function showLogin(){document.getElementById('app').classList.add('hidden');document.getElementById('login').classList.remove('hidden');}
 function showApp(){document.getElementById('login').classList.add('hidden');document.getElementById('app').classList.remove('hidden');for(const k in loaded)delete loaded[k];
+ if(typeof PUSH_SUPPORTED!=='undefined'&&PUSH_SUPPORTED)pushReg().catch(()=>{});
  // W14: deep links from the retired Cowork pointer cards (#health/#updates/#followups/#workshop/#clients)
  const h=(location.hash||'').replace('#','');
  // legacy #review deep-links land on the Workshop board (the standalone Review tab was absorbed)
@@ -1361,7 +1402,17 @@ const unesc=s=>String(s).replace(/\\([\\`*_{}\[\]()#+\-.!|~$])/g,'$1').replace(/
  *
  * The activity fingerprint is VERSIONED so only a GENUINELY-new note/showing trips reappear, not
  * cosmetic churn from the nightly render-workbook-md / parseTables pipeline (issue 141eab7b):
- *   v2 (current, "2:" prefix) — activityCanon() strips dates/times/timestamps + smart-quotes +
+ *   v3 (current, "3:" prefix) — "3:" + the v2 churn-invariant hash + "|" + a content-token SNAPSHOT.
+ *     The reappear TEST is UNCHANGED from v2: listingActivityMatch compares the HASH portion only, so
+ *     a listing reappears iff the canonicalized activity blob changed (fail-toward-reappear; minimal
+ *     permanent-hide). The token snapshot is carried ONLY to EXPLAIN a reappear (listingReappearReason
+ *     = current content tokens minus stored ones): non-empty names the new word; [] = a hash flip with
+ *     NO new content token = a SPURIOUS reappear (a canonicalizer gap) -> auditable, drives an
+ *     activityCanon fix at the SOURCE. Token-DIFF was deliberately REJECTED as the reappear test
+ *     (workshop ae04acc7): it does NOT fix the canon-gap class a residual format token also flips, and
+ *     a token-membership test would WIDEN permanent-hide (an all-old-vocabulary new note has no new
+ *     token -> stays hidden silently) — the broker's worst direction. Tokens = observability, not the test.
+ *   v2 (legacy, "2:" prefix) — activityCanon() strips dates/times/timestamps + smart-quotes +
  *     punctuation and collapses whitespace BEFORE hashing, so date re-stamping, smart-quote /
  *     unicode-punctuation normalization and markdown-escape residue do NOT flip the hash; a real
  *     new entry still introduces new WORD tokens that do. Note order is PRESERVED (not sorted):
@@ -1369,7 +1420,7 @@ const unesc=s=>String(s).replace(/\\([\\`*_{}\[\]()#+\-.!|~$])/g,'$1').replace(/
  *     permanent-hide collision risk — the worse direction — for a churn source that does not occur.
  *   v1 (legacy, bare hex) — rows stored before 141eab7b keep their ORIGINAL lowercase+trim+ws-collapse
  *     algorithm via _fpV1, so the formula change does NOT silently clear existing broker suppressions;
- *     they drain naturally (genuine reappear, or a manual re-suppress which rewrites a v2 fp).
+ *     they drain naturally (genuine reappear, or a manual re-suppress which rewrites a v3 fp).
  *     listingActivityMatch() routes by prefix and fails toward reappear on any garbled stored value.
  * (function declarations on purpose: callable as window globals from the W10 jsdom harness.) */
 function cyrb53(str,seed){seed=seed||0;let h1=0xdeadbeef^seed,h2=0x41c6ce57^seed;for(let i=0,ch;i<str.length;i++){ch=str.charCodeAt(i);h1=Math.imul(h1^ch,2654435761);h2=Math.imul(h2^ch,1597334677);}h1=Math.imul(h1^(h1>>>16),2246822507);h1^=Math.imul(h2^(h2>>>13),3266489909);h2=Math.imul(h2^(h2>>>16),2246822507);h2^=Math.imul(h1^(h1>>>13),3266489909);return (4294967296*(2097151&h2)+(h1>>>0)).toString(16);}
@@ -1413,11 +1464,44 @@ function activityCanon(s){
 // word token) canonicalizes identically and stays hidden — unreachable with real notes (which carry an
 // agent/action/feedback word).
 function _fpV1(o){return cyrb53(norm(gv(o,'communication')||'').replace(/\s+/g,' ')+'\u0001'+norm(gv(o,'showing')||'').replace(/\s+/g,' '));}  // FROZEN pre-141eab7b algorithm for legacy bare-hex rows
-function listingActivityFp(o){return '2:'+cyrb53(activityCanon(gv(o,'communication'))+'\u0001'+activityCanon(gv(o,'showing')));}  // gv (defensive substring) not o['communications'] — survives a header rename (cold-review ml); '2:' = hardened v2 fp
-// True when the stored fp still matches the listing's current activity. Routes by version prefix:
-// "2:" -> hardened v2; bare hex (legacy) -> original v1. An unknown/garbled stored value matches
-// neither -> treated as changed -> the listing reappears (fail toward reappear, never permanent-hide).
-function listingActivityMatch(stored,o){return (typeof stored==='string'&&stored.charAt(0)==='2'&&stored.charAt(1)===':')?(stored===listingActivityFp(o)):(stored===_fpV1(o));}
+// Canonical activity HASH (the churn-invariant core) — the value the reappear TEST compares for v2 AND v3.
+function _activityHash(o){return cyrb53(activityCanon(gv(o,'communication'))+'\u0001'+activityCanon(gv(o,'showing')));}
+function _fpV2(o){return '2:'+_activityHash(o);}  // FROZEN 141eab7b hardened-hash algorithm (kept so a stored "2:" value still resolves; 0 live rows)
+// activityTokens: the SAME canonical pipeline that feeds the hash, split to a DEDUPED set of word/number content
+// tokens. Powers reason-logging ONLY — NEVER the reappear test (a token-membership test would WIDEN permanent-hide,
+// the broker's worst direction; see workshop ae04acc7). The 500-cap bounds the stored fp size; overflow over-reports
+// the reappear reason, which is the SAFE/visible direction.
+function activityTokens(o){return Array.from(new Set((activityCanon(gv(o,'communication'))+' '+activityCanon(gv(o,'showing'))).split(' ').filter(Boolean))).slice(0,500);}
+// v3 fp = "3:" + churn-invariant hash + "|" + content-token snapshot. The token snapshot is carried so a REAPPEAR
+// can be EXPLAINED (which new note/showing word triggered it) and a spurious reappear (a hash flip with NO new
+// content token = a canonicalizer gap) becomes auditable. The snapshot is NEVER consulted by listingActivityMatch
+// — the reappear test stays the whole-blob hash, fail-toward-reappear (workshop ae04acc7).
+function listingActivityFpV3(o){return '3:'+_activityHash(o)+'|'+activityTokens(o).join(',');}
+function listingActivityFp(o){return listingActivityFpV3(o);}  // current writer = v3 (gv defensive-substring survives a header rename — cold-review ml)
+// Extract the HASH portion from a stored fp of any version (v3 "3:"hash"|"toks / v2 "2:"hash).
+function _storedHash(stored){if(typeof stored!=='string'||stored.charAt(1)!==':')return null;const bar=stored.indexOf('|');return bar>=0?stored.slice(2,bar):stored.slice(2);}
+// True when the stored fp still matches the listing's current activity. Routes by version prefix and compares the
+// HASH ONLY for v2/v3 (token snapshot deliberately ignored — workshop ae04acc7); legacy bare hex -> v1. An unknown/
+// garbled/NULL stored value matches nothing -> treated as changed -> reappears (fail toward reappear, never
+// permanent-hide).
+function listingActivityMatch(stored,o){
+ if(typeof stored!=='string')return false;
+ if(stored.charAt(0)==='3'&&stored.charAt(1)===':')return _storedHash(stored)===_activityHash(o);
+ if(stored.charAt(0)==='2'&&stored.charAt(1)===':')return stored===_fpV2(o);
+ return stored===_fpV1(o);
+}
+// listingReappearReason: WHY did a suppressed listing reappear? Returns the content tokens present NOW but absent at
+// suppression time. [] => no new content token => a pure hash flip with no new content = a SPURIOUS reappear (a
+// canonicalizer gap) -> an auditable signal to harden activityCanon at the SOURCE. Non-empty => genuine new activity
+// (names the added note/showing word) -- usually genuine, but a token-introducing canon gap also lands here, so it
+// is NOT proof of genuine activity (ml-lens). null => stored value carries no token snapshot (legacy v1/v2) so the reason is
+// unknown. Observability ONLY — does not affect the reappear decision.
+function listingReappearReason(stored,o){
+ if(typeof stored!=='string'||stored.charAt(0)!=='3'||stored.charAt(1)!==':')return null;
+ const bar=stored.indexOf('|');if(bar<0)return null;
+ const old=new Set(stored.slice(bar+1).split(',').filter(Boolean));
+ return activityTokens(o).filter(t=>!old.has(t));
+}
 function parseTables(md){
  const tables=[];let cur=null;
  for(const ln of md.split('\n')){
@@ -1525,7 +1609,14 @@ function renderListings(t,mount,isSeller,sctx){
   const key=listingKey(o);
   if(Object.prototype.hasOwnProperty.call(supp,key)){
    if(listingActivityMatch(supp[key],o)){hidden.push(o);return;}   // still suppressed — no genuinely-new communications/showing (141eab7b: version-aware, churn-invariant)
-   revive.push(key);                                              // came up again in communications -> auto-restore + show
+   // came up again -> auto-restore + show. Log WHY (added tokens) for auditability (workshop ae04acc7).
+   // SIGNAL READING (ml-lens review): reason==[] RELIABLY flags a SPURIOUS reappear (hash flip with NO new
+   // token = a canonicalizer gap) -> drives a source-side activityCanon fix. A NON-EMPTY reason lists the
+   // ADDED tokens but is NOT proof of genuine activity: a token-INTRODUCING canon gap (escape residue like
+   // "amp", a stray symbol that tokenizes) also shows here -> treat non-empty as "added tokens", not "genuine".
+   // Durable Flags-tab sink = follow-up ticket cbd9b1da.
+   try{var _why=listingReappearReason(supp[key],o);console.debug('[listing-suppress] reappear',{key:key,reason:(_why&&_why.length)?('added tokens: '+_why.join(' ')):(_why?'SPURIOUS — no new content token (canonicalizer gap)':'unknown (legacy v1/v2 fp, no token snapshot)')});}catch(_e){}
+   revive.push(key);                                              // auto-restore + show
   }
   shown.push(o);
  });
@@ -1993,6 +2084,55 @@ async function loadSettings(){
  so.onclick=async()=>{await sb.auth.signOut();showLogin();};
  card2.appendChild(so);
  main.appendChild(card2);
+ // Notifications (issue a18f9eae) — Web Push subscribe/unsubscribe + device-capability guidance
+ const cardN=el('div','item');
+ cardN.appendChild(el('div','title','Notifications'));
+ cardN.appendChild(el('p','sub','Get a notification when a new item lands in Updates, Follow-ups, or Workshop — even when the app is closed, as long as your browser is running.'));
+ const nbtn=el('button',null,'…'); nbtn.disabled=true;
+ const nmsg=el('div','mutedtxt','');
+ cardN.appendChild(nbtn); cardN.appendChild(nmsg);
+ main.appendChild(cardN);
+ (async()=>{
+  if(!PUSH_SUPPORTED){
+   nbtn.style.display='none';
+   const ios=/iP(hone|ad|od)/.test(navigator.userAgent);
+   const standalone=(window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches)||navigator.standalone;
+   nmsg.textContent = (ios&&!standalone)
+    ? 'On iPhone/iPad: first add this to your Home Screen (Share → Add to Home Screen), then open it from there — notifications can only be turned on from the installed app.'
+    : 'This browser can’t show notifications. Try Chrome or Safari, or open the app from your Home Screen.';
+   return;
+  }
+  if(!PUSH_CONFIGURED){
+   nbtn.style.display='none';
+   nmsg.textContent='Notifications aren’t switched on for this site yet — check back soon.';
+   return;
+  }
+  if(Notification.permission==='denied'){
+   nbtn.style.display='none';
+   nmsg.textContent='Notifications are blocked for this site in your browser settings. Allow them there, then reopen this page.';
+   return;
+  }
+  let sub=null; try{ sub=await pushCurrent(); }catch(e){}
+  function paint(on){
+   nbtn.disabled=false; nbtn.className=on?'':'primary';
+   nbtn.textContent=on?'Turn off notifications':'Turn on notifications';
+   nmsg.textContent=on?'On — this device will be notified.':'';
+  }
+  paint(!!sub);
+  nbtn.onclick=async()=>{
+   const wasOn=!!(await pushCurrent().catch(()=>null));
+   nbtn.disabled=true; nbtn.textContent='…';
+   try{
+    if(wasOn){ await pushUnsubscribe(); paint(false); }
+    else { await pushSubscribe(); paint(true); }
+   }catch(e){
+    const m=String((e&&e.message)||e);
+    paint(wasOn);
+    nmsg.textContent = m.startsWith('permission') ? 'You’ll need to allow notifications to turn this on.'
+                      : (m==='not-configured' ? 'Notifications aren’t switched on for this site yet — check back soon.' : m==='unsupported' ? 'This browser can’t show notifications.' : ('Could not change notifications: '+m));
+   }
+  };
+ })();
  const card3=el('div','item');
  card3.appendChild(el('div','title','About'));
  card3.appendChild(el('p','sub','Forest Hill boards on your phone — the same four boards as the desktop dashboards, read straight from your private database over an authenticated session. Desktop stays the place for editing and for talking to Claude; this view is for reading and checking things off. Tip: in Safari, Share → Add to Home Screen makes this open like an app.'));
