@@ -73,6 +73,11 @@ button:active { background:#f1efe8; }
 .pick { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:6px; }
 .chip { font-size:13px; padding:6px 14px; border:1px solid #d3d1c7; border-radius:999px; background:#fff; cursor:pointer; }
 .chip.sel { background:#1a1915; color:#fff; border-color:#1a1915; }
+/* P2 client-lifecycle: stage sub-section heading + Firm/Closed chip tints */
+.cfstage { font-size:12px; font-weight:600; color:#5f5e5a; text-transform:uppercase; letter-spacing:.04em; margin:8px 0 4px; }
+.chip.chip-firm { border-color:#c9a24b; background:#fbf3df; color:#854f0b; }
+.chip.chip-closed { border-color:#cfc9c0; background:#f1efe8; color:#5f5e5a; }
+.chip.chip-firm.sel, .chip.chip-closed.sel { background:#1a1915; color:#fff; border-color:#1a1915; }
 .hero { border:1px solid #e6e4dc; border-radius:14px; background:#fff; padding:16px; margin-bottom:14px; }
 .hero .addr { font-size:18px; font-weight:700; }
 .hero .nums { display:flex; gap:20px; flex-wrap:wrap; margin-top:10px; }
@@ -227,7 +232,7 @@ function copyPrompt(t,b){
    the user to "Add to Home Screen" when that is what is missing. Client only stores its
    own subscription (dash_push_subscribe) and renders pushes (sw.js); the server decides
    what is new (dispatcher = issues 0a3ea2f5 + 52a605d0). */
-const VAPID_PUBLIC='REPLACE_AT_DEPLOY__VAPID_PUBLIC_KEY'; // substituted at deploy; matching private key = server secret only
+const VAPID_PUBLIC='BDNKaeyr2QWObmUy7LNeOFnyz3zRr3CpdI8EdwiY2t5Axljq3nO_sHGDjR4bio0M8QWsqKvhNdGg4iUgKXnY0Ik'; // go-live: real VAPID public key (public by design; the matching private key lives only in Vault/server)
 const PUSH_SUPPORTED=('serviceWorker' in navigator)&&('PushManager' in window)&&('Notification' in window);
 const PUSH_CONFIGURED=PUSH_SUPPORTED&&typeof VAPID_PUBLIC==='string'&&VAPID_PUBLIC.indexOf('REPLACE_AT_DEPLOY')!==0&&VAPID_PUBLIC.length>20; // false until the real public key is substituted at deploy
 function urlB64ToU8(s){
@@ -535,7 +540,12 @@ function renderUpdates(rows){
   if(!groups[key]) groups[key]={label,isBuyer,sellerName:row.seller_name,items:[],quiet:0};
   const it=parseItem(row);
   if(cuDISM[it.id]&&!cuShowDismissed){continue;}
-  if(!isMaterial(it)&&!cuShowDismissed){groups[key].quiet++;continue;}
+  // Materiality VERDICT is single-sourced server-side (run_is_material, issue 99a1ae75): prefer the
+  // server `material` flag from dash_sweep_runs(). Backward-compat: if absent (older RPC / pre-column
+  // row / DB rollback) fall back to client isMaterial() so the board still renders. classify() below
+  // still produces the tag chips (display only — the verdict, not the labels, is single-sourced).
+  const material=(typeof row.material==='boolean')?row.material:isMaterial(it);
+  if(!material&&!cuShowDismissed){groups[key].quiet++;continue;}
   it.dismissed=!!cuDISM[it.id];
   groups[key].items.push(it);
  }
@@ -1603,6 +1613,48 @@ function renderListings(t,mount,isSeller,sctx){
  if(!rows.length)return;
  const subj=rows.filter(o=>norm(o['source'])==='subject');
  const rest=rows.filter(o=>norm(o['source'])!=='subject');
+ // P2 client-lifecycle collapse: a Firm/Closed file shows ONLY the subject (seller) /
+ // purchased property (buyer); the dropped comps/candidates collapse behind a toggle (kept
+ // for the historical record, hidden by default — SPEC §7). Render-layer read of the snapshot;
+ // it does NOT mutate the sheet (the freeze/refresh-only-the-subject behaviour is the P3
+ // write-side in buyer-sweep / seller-sweep). Buyer purchased-row detection keys off a
+ // source=='purchased' marker the P3 sweep stamps; until then a buyer file has no marked row,
+ // so we keep the full list and surface a one-line note rather than guessing.
+ if(sctx&&sctx.collapsed){
+  if(isSeller){
+   subj.forEach(o=>mount.appendChild(heroCard(o)));
+   if(rest.length){
+    const tog=el('button','lk','Comps ('+rest.length+') — collapsed for '+(sctx.stage==='closed'?'a closed':'a firm')+' listing · show');
+    let box=null;
+    tog.onclick=()=>{if(box){box.remove();box=null;tog.textContent='Comps ('+rest.length+') — collapsed for '+(sctx.stage==='closed'?'a closed':'a firm')+' listing · show';return;}box=el('div');rest.forEach(o=>box.appendChild(listingCard(o,null)));tog.insertAdjacentElement('afterend',box);tog.textContent='Hide comps ('+rest.length+')';};
+    if(!subj.length)mount.appendChild(el('h2',null,'Subject'));
+    mount.appendChild(el('div','note','Collapsed view — only the subject property is shown while this listing is '+sctx.stage+'. The comps are kept in the sheet but no longer refreshed.'));
+    mount.appendChild(tog);
+   }
+   return;
+  } else {
+   const purchased=rest.filter(o=>norm(o['source'])==='purchased');
+   const others=rest.filter(o=>norm(o['source'])!=='purchased');
+   if(purchased.length){
+    mount.appendChild(el('h2',null,'Purchased property'));
+    mount.appendChild(el('div','note','Collapsed view — only the purchased property is shown while this buyer is '+sctx.stage+'. The other candidates are kept in the sheet but no longer refreshed.'));
+    purchased.forEach(o=>mount.appendChild(listingCard(o,null)));
+    if(others.length){
+     const tog=el('button','lk','Other candidates ('+others.length+') — collapsed · show');
+     let box=null;
+     tog.onclick=()=>{if(box){box.remove();box=null;tog.textContent='Other candidates ('+others.length+') — collapsed · show';return;}box=el('div');others.forEach(o=>box.appendChild(listingCard(o,null)));tog.insertAdjacentElement('afterend',box);tog.textContent='Hide other candidates ('+others.length+')';};
+     mount.appendChild(tog);
+    }
+   } else {
+    // No purchased row marked yet (P3 sweep hasn't stamped source=='purchased'). Show the full
+    // list rather than hiding everything, with a note so the collapse is understood as pending.
+    mount.appendChild(el('h2',null,'Tracked listings ('+rest.length+')'));
+    mount.appendChild(el('div','note','This buyer is '+sctx.stage+' — the view collapses to just the purchased property once the next sweep marks it. Showing all tracked listings until then.'));
+    rest.forEach(o=>mount.appendChild(listingCard(o,sctx)));
+   }
+   return;
+  }
+ }
  const supp=(sctx&&sctx.supp)||{};
  const shown=[],hidden=[],revive=[];
  rest.forEach(o=>{
@@ -1813,12 +1865,24 @@ function renderClientPicker(){
  main.appendChild(el('p','sub','Your buyer and seller workbooks, readable. Pick a client — the file is rendered from last night’s snapshot (refreshed nightly at 10 PM). Read-only; the Google Sheet stays the record.'));
  const pickers=el('div');
  const detail=el('div');
+ // P2 (client-lifecycle): group EACH side into Active / Firm / Closed sub-sections instead of
+ // hiding closed. stage comes from dash_client_files (NULL/unknown -> treated as 'active', so a
+ // pre-P2 RPC that omits the column degrades to a single Active group, never an empty picker).
+ const STAGE_ORDER=['active','firm','closed'];
+ const STAGE_LABEL={active:'Active',firm:'Firm',closed:'Closed'};
+ const cfStage=c=>{const s=(c&&c.stage||'').toString().trim().toLowerCase();return STAGE_LABEL[s]?s:'active';};
  const mk=(kind,title)=>{
   const set=CF_LIST.filter(c=>c.client_type===kind);if(!set.length)return;
   pickers.appendChild(el('h2',null,title));
-  const row=el('div','pick');
-  set.forEach(c=>{const b=el('button','chip',c.display_name);b.onclick=()=>openClient(c,b,detail);row.appendChild(b);});
-  pickers.appendChild(row);
+  STAGE_ORDER.forEach(stg=>{
+   const sub=set.filter(c=>cfStage(c)===stg);if(!sub.length)return;
+   // single Active group renders without a sub-label (the side heading already reads as "active");
+   // Firm / Closed always get a labelled sub-section so they are visibly present, not hidden.
+   if(!(stg==='active'&&sub.length===set.length)) pickers.appendChild(el('h3','cfstage',STAGE_LABEL[stg]+' ('+sub.length+')'));
+   const row=el('div','pick');
+   sub.forEach(c=>{const b=el('button','chip',c.display_name);if(stg!=='active')b.classList.add('chip-'+stg);b.onclick=()=>openClient(c,b,detail);row.appendChild(b);});
+   pickers.appendChild(row);
+  });
  };
  mk('seller','Listings');mk('buyer','Buyers');
  if(!CF_LIST.length) pickers.appendChild(el('div','note','No snapshots yet — they appear after tonight’s 10 PM snapshot run.'));
@@ -1850,7 +1914,11 @@ async function openClient(c,btn,detail){
   let profN=0;
   for(const t of tables){if(cfClassify(t)==='profile'){renderProfileKv(t,detail,profN===0?(isSeller?'Listing file':'Buyer profile'):null);profN++;}}
   const suppMap={};(suppArr||[]).forEach(s=>{suppMap[s.listing_key]=s.activity_fp;});
-  const sctx={clientId:c.client_id,clientType:c.client_type,supp:suppMap,refresh:()=>openClient(c,btn,detail)};
+  // P2 client-lifecycle: a Firm/Closed file is "collapsed-but-live" — the comps/listing view
+  // shows ONLY the subject (seller) / purchased property (buyer). stage comes from the RPC;
+  // anything other than a recognised 'firm'/'closed' is treated as 'active' (full view).
+  const cstg=((c.stage||'')+'').trim().toLowerCase();const collapsed=(cstg==='firm'||cstg==='closed');
+  const sctx={clientId:c.client_id,clientType:c.client_type,supp:suppMap,stage:cstg||'active',collapsed:collapsed,refresh:()=>openClient(c,btn,detail)};
   for(const t of tables){if(cfClassify(t)==='listings')renderListings(t,detail,isSeller,sctx);}
   for(const t of tables){const k=cfClassify(t);
    if(k==='showings')renderShowings(t,detail);
@@ -2093,6 +2161,16 @@ async function loadSettings(){
  cardN.appendChild(nbtn); cardN.appendChild(nmsg);
  main.appendChild(cardN);
  (async()=>{
+  // 99a2fa1e: on iOS, Web Push works ONLY from the installed (Home-Screen/standalone) PWA — a plain Safari
+  // tab on iOS 16.4+ reports PushManager+Notification present but pushManager.subscribe() rejects. Gate on
+  // install-state FIRST so a tab shows the Add-to-Home-Screen guidance instead of a button that silently fails.
+  const IS_IOS=/iP(hone|ad|od)/.test(navigator.userAgent)||(/Macintosh/.test(navigator.userAgent)&&navigator.maxTouchPoints>1);
+  const IS_STANDALONE=(window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches)||navigator.standalone===true;
+  if(IS_IOS&&!IS_STANDALONE){
+   nbtn.style.display='none';
+   nmsg.textContent='On iPhone/iPad: first add this to your Home Screen (Share → Add to Home Screen), then open it from there — notifications can only be turned on from the installed app.';
+   return;
+  }
   if(!PUSH_SUPPORTED){
    nbtn.style.display='none';
    const ios=/iP(hone|ad|od)/.test(navigator.userAgent);
