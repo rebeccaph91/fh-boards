@@ -37,12 +37,25 @@ self.addEventListener('push', (event) => {
 const APP_ORIGIN = 'https://rebeccaph91.github.io';
 const APP_BASE   = APP_ORIGIN + '/fh-boards/';
 // Clamp any payload/server-supplied target to within /fh-boards/ (keep its hash); else fall back to root.
+// A RELATIVE target (no scheme, not protocol-relative) resolves against the SW scope (= APP_BASE = /fh-boards/),
+// so it is inherently in-scope — we keep it AS SENT (e.g. './#followups' stays './#followups') after rejecting
+// any '..' traversal that could climb out of /fh-boards/. Only ABSOLUTE targets need origin+scope validation,
+// which uses URL when present. This is URL-free for the common deep-link path, so it also works where URL is
+// unavailable (the a18f9eae sw.js test sandbox), where the old code silently fell back to root and dropped the hash.
 function clampTarget(raw) {
-  try {
-    const u = new URL(raw, APP_BASE);
-    if (u.origin === APP_ORIGIN && u.pathname.indexOf('/fh-boards/') === 0) return u.href;
-  } catch (e) {}
-  if (typeof raw === 'string' && raw.charAt(0) === '#') return APP_BASE + raw;
+  if (typeof raw !== 'string' || !raw) return APP_BASE;
+  if (raw.charAt(0) === '#') return APP_BASE + raw;                 // bare hash -> anchor on base
+  const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(raw);              // http:, javascript:, data: ...
+  const protoRel  = raw.slice(0, 2) === '//';                      // //evil.com/...
+  if (!hasScheme && !protoRel) {                                    // relative -> in-scope by construction
+    return raw.indexOf('..') === -1 ? raw : APP_BASE;              // ...unless it path-traverses out
+  }
+  if (typeof URL === 'function') {                                 // absolute -> validate origin + scope
+    try {
+      const u = new URL(raw, APP_BASE);
+      if (u.origin === APP_ORIGIN && u.pathname.indexOf('/fh-boards/') === 0) return raw;
+    } catch (e) {}
+  }
   return APP_BASE;
 }
 self.addEventListener('notificationclick', (event) => {
