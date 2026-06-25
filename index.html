@@ -262,6 +262,29 @@ async function pushUnsubscribe(){
  const sub=await pushCurrent();
  if(sub){ try{await rpc('dash_push_unsubscribe',{p_endpoint:sub.endpoint});}catch(e){} try{await sub.unsubscribe();}catch(e){} }
 }
+/* push re-subscribe drain (issue 99a2fa1e): sw.js fires pushsubscriptionchange when the push service rotates
+   our endpoint; it postMessages the new subscription (page open) or stashes it in the 'fh-push-stash' Cache
+   (page closed). The SW can't call the authed RPC; we can — persist via dash_push_subscribe (same shape as pushSubscribe). */
+const PUSH_STASH_CACHE='fh-push-stash', PUSH_STASH_URL='/fh-boards/__push_resub';
+async function persistResubscription(j){
+ if(!j||!j.endpoint) return;
+ j.ua=navigator.userAgent;
+ try{ await rpc('dash_push_subscribe',{p_sub:j}); }catch(e){ /* left in the Cache stash; retried next load */ }
+}
+async function drainPushStash(){
+ if(!('caches' in window)) return;
+ try{
+  const cache=await caches.open(PUSH_STASH_CACHE);
+  const res=await cache.match(PUSH_STASH_URL);
+  if(!res) return;
+  const j=await res.json();
+  await persistResubscription(j);
+  await cache.delete(PUSH_STASH_URL);
+ }catch(e){}
+}
+if('serviceWorker' in navigator){
+ navigator.serviceWorker.addEventListener('message',(ev)=>{ const d=ev&&ev.data; if(d&&d.type==='push-resubscribed'&&d.sub) persistResubscription(d.sub); });
+}
 /* ---- Workshop trigger-prompt builders (issue 93fc542a) ----
    Fresh Claude sessions boot COLD: no folder mounts, no credentials, no ritual
    context (Memory/cold-start-triggers.md). Every workshop copy-to-Claude
@@ -373,7 +396,7 @@ window.addEventListener('hashchange',()=>{ if(document.getElementById('app').cla
 /* ============ auth ============ */
 function showLogin(){document.getElementById('app').classList.add('hidden');document.getElementById('login').classList.remove('hidden');}
 function showApp(){document.getElementById('login').classList.add('hidden');document.getElementById('app').classList.remove('hidden');for(const k in loaded)delete loaded[k];
- if(typeof PUSH_SUPPORTED!=='undefined'&&PUSH_SUPPORTED)pushReg().catch(()=>{});
+ if(typeof PUSH_SUPPORTED!=='undefined'&&PUSH_SUPPORTED){pushReg().catch(()=>{});drainPushStash().catch(()=>{});}
  // W14: deep links from the retired Cowork pointer cards (#health/#updates/#followups/#workshop/#clients)
  const h=(location.hash||'').replace('#','');
  // legacy #review deep-links land on the Workshop board (the standalone Review tab was absorbed)
