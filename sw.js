@@ -5,7 +5,7 @@
    the VAPID *private* key never leaves the server (edge secret). This file only RECEIVES
    pushes the server already sent and renders them — it holds no keys at all. */
 'use strict';
-const SW_VERSION = 'a18f9eae-1';   // bump to force-activate a new service worker
+const SW_VERSION = '99a2fa1e-1';   // bump to force-activate a new service worker
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
@@ -32,19 +32,67 @@ self.addEventListener('push', (event) => {
   event.waitUntil(self.registration.showNotification(title, opts));
 });
 
-// Tapping the notification focuses an open boards tab (deep-linked) or opens one.
+// Tapping the notification focuses an open BOARDS tab (deep-linked) or opens one. The board runs on the
+// SHARED rebeccaph91.github.io origin, so we must NOT grab just any window — only windows under /fh-boards/.
+const APP_ORIGIN = 'https://rebeccaph91.github.io';
+const APP_BASE   = APP_ORIGIN + '/fh-boards/';
+// Clamp any payload/server-supplied target to within /fh-boards/ (keep its hash); else fall back to root.
+function clampTarget(raw) {
+  try {
+    const u = new URL(raw, APP_BASE);
+    if (u.origin === APP_ORIGIN && u.pathname.indexOf('/fh-boards/') === 0) return u.href;
+  } catch (e) {}
+  if (typeof raw === 'string' && raw.charAt(0) === '#') return APP_BASE + raw;
+  return APP_BASE;
+}
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const target = (event.notification.data && event.notification.data.url) || './';
+  const target = clampTarget((event.notification.data && event.notification.data.url) || APP_BASE);
   event.waitUntil((async () => {
     const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const c of all) {
-      // focus any already-open boards window; nudge it to the right board via hash
-      if ('focus' in c) {
+      if (typeof c.url === 'string' && c.url.indexOf('/fh-boards/') !== -1 && 'focus' in c) {
         try { if ('navigate' in c && target) await c.navigate(target); } catch (e) {}
         return c.focus();
       }
     }
     if (self.clients.openWindow) return self.clients.openWindow(target);
+  })());
+});
+
+/* pushsubscriptionchange (issue 99a2fa1e): the push service can silently rotate/expire a subscription.
+   Re-subscribe with the SAME VAPID public key, then get the new subscription persisted via the authed
+   dash_push_subscribe RPC. The SW has no Supabase session, so it postMessages an open /fh-boards/ client;
+   if none is open it stashes the subscription in Cache for the page to drain on next authed load. */
+const VAPID_PUBLIC = 'BDNKaeyr2QWObmUy7LNeOFnyz3zRr3CpdI8EdwiY2t5Axljq3nO_sHGDjR4bio0M8QWsqKvhNdGg4iUgKXnY0Ik';
+const PUSH_STASH_CACHE = 'fh-push-stash';
+const PUSH_STASH_URL   = '/fh-boards/__push_resub';   // synthetic cache key; never fetched over the network
+function vapidKeyToU8(s) {
+  const pad = '='.repeat((4 - s.length % 4) % 4);
+  const b64 = (s + pad).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(b64); const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+self.addEventListener('pushsubscriptionchange', (event) => {
+  event.waitUntil((async () => {
+    let sub = null;
+    try {
+      sub = await self.registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: (event.newSubscription && event.newSubscription.options &&
+                               event.newSubscription.options.applicationServerKey) || vapidKeyToU8(VAPID_PUBLIC)
+      });
+    } catch (e) { return; }
+    if (!sub) return;
+    const j = sub.toJSON(); j.resubscribed_at = new Date().toISOString();
+    const msg = { type: 'push-resubscribed', sub: j };
+    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const boards = clients.filter((c) => typeof c.url === 'string' && c.url.indexOf('/fh-boards/') !== -1);
+    if (boards.length) { for (const c of boards) { try { c.postMessage(msg); } catch (e) {} } return; }
+    try {
+      const cache = await caches.open(PUSH_STASH_CACHE);
+      await cache.put(PUSH_STASH_URL, new Response(JSON.stringify(j), { headers: { 'Content-Type': 'application/json' } }));
+    } catch (e) {}
   })());
 });
