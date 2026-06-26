@@ -2095,13 +2095,15 @@ function renderHealth(HEALTH_SKILLS,runs,pfs,schedOk,mirror,HB){
     const expected=sk.slots.filter(h=>h<=nowH-0.2).length;
     const got=mine.length;
     if(expected>0)due++;
-    const worst=Math.max(0,...mine.map(r=>SEV[r.status]||2));
+    // status = MOST RECENT fire today (not worst-of-day); a coverage gap (got<expected) still flags amber.
+    const recent=got?mine.reduce((a,b)=>((b._d&&a._d&&b._d>a._d)?b:a)):null;
+    const sev=recent?(SEV[recent.status]||2):0;
     if(got===0&&expected>0){p=pill('r','missed');kindCol='#e24b4a';attention++;}
     else if(got===0){p=pill('n','due 8:00 AM');}
-    else if(worst>=3){p=pill('r','failed');kindCol='#e24b4a';attention++;}
-    else if(worst===2||got<expected){p=pill('a','check');kindCol='#ef9f27';attention++;}
+    else if(sev>=3){p=pill('r','failed');kindCol='#e24b4a';attention++;}
+    else if(sev===2||got<expected){p=pill('a','check');kindCol='#ef9f27';attention++;}
     else{p=pill('g','ran clean');kindCol='#1d9e75';green++;}
-    body.appendChild(el('div','nt',got+'/'+expected+' fires so far today'+(mine[0]&&mine[0].notes?' · latest: '+mine[0].notes.slice(0,110):'')));
+    body.appendChild(el('div','nt',got+'/'+expected+' fires so far today'+(recent&&recent.notes?' · latest: '+recent.notes.slice(0,110):'')));
    }else{
     if(mine.length===0){
      if(nowH>sk.dueH+GRACE){p=pill('r','missed');kindCol='#e24b4a';due++;attention++;body.appendChild(el('div','nt','No run logged today — was due '+sk.due+(prev[0]?' · yesterday: '+prev[0].status:'')));}
@@ -2109,13 +2111,18 @@ function renderHealth(HEALTH_SKILLS,runs,pfs,schedOk,mirror,HB){
      else{p=pill('n','due '+sk.due);if(prev[0])body.appendChild(el('div','nt','Yesterday: '+prev[0].status+(prev[0].notes?' — '+prev[0].notes.slice(0,100):'')));}
     }else{
      due++;
-     const worst=Math.max(...mine.map(r=>SEV[r.status]||2));
-     const worstRow=mine.find(r=>(SEV[r.status]||2)===worst);
-     const t=torTime(worstRow._d);
-     if(worst>=3){p=pill('r','failed');kindCol='#e24b4a';attention++;}
-     else if(worst===2){p=pill('a','partial');kindCol='#ef9f27';attention++;}
+     // Health = MOST RECENT run today (not worst-of-day): the tile reflects CURRENT state, so a clean
+     // retry isn't masked red by an earlier failure. A genuine failure still surfaces via its Workshop
+     // sys_ flag (RULE 0); earlier non-clean runs are noted below for transparency but do not colour the
+     // pill. (Broker rule, 2026-06-25 — replaces the prior worst-of-day pill.)
+     const recent=mine.reduce((a,b)=>((b._d&&a._d&&b._d>a._d)?b:a));
+     const sev=SEV[recent.status]||2;
+     const t=torTime(recent._d);
+     const earlierBad=mine.filter(r=>r!==recent&&(SEV[r.status]||2)>=2).length;
+     if(sev>=3){p=pill('r','failed');kindCol='#e24b4a';attention++;}
+     else if(sev===2){p=pill('a','partial');kindCol='#ef9f27';attention++;}
      else{p=pill('g','ran clean');kindCol='#1d9e75';green++;}
-     body.appendChild(el('div','nt',mine.length+(mine.length>1?' rows':' row')+' · '+t+(worstRow.notes?' — '+worstRow.notes.slice(0,130):'')));
+     body.appendChild(el('div','nt',mine.length+(mine.length>1?' rows':' row')+' · latest '+t+' ['+recent.status+']'+(earlierBad?' · '+earlierBad+' earlier non-clean today':'')+(recent.notes?' — '+recent.notes.slice(0,120):'')));
     }
    }
    if(p&&(p.textContent==='missed'||p.textContent==='failed'||p.textContent==='partial')){
