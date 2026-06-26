@@ -1965,7 +1965,10 @@ const SEV={failed:3,error:3,partial:2,success:1};
 const SKILL_ALIAS={'nightly-mobile-snapshot-22-00':'mobile-snapshot'};
 // which run-names write rich telemetry to the runs table:
 const RUNS_PRODUCERS={'brokerbay-showings-sync':1,'pending-followups-digest':1,'fireflies-sync':1,'conversation-sync':1,'realm-sync':1,'buyer-sweep':1,'seller-sweep':1,'mobile-snapshot':1};
-const DIGESTS_ROW={id:'digests',label:'buyer-digest · seller-digest',due:'on demand',kind:'info',info:'No runs telemetry yet — Phase 1 adds logging so failures here become visible'};
+// buyer-digest + seller-digest are ON-DEMAND (not scheduled), so they are intentionally NOT on the
+// run-health board, which tracks SCHEDULED tasks. A real issue when one runs is filed to the Workshop
+// board via a sys_ flag (RULE 0), not surfaced here. (Removed the DIGESTS_ROW + its two list pushes,
+// 2026-06-25, per broker: "they aren't scheduled tasks so they shouldn't be on the skill health board.")
 // fallback only if the schedule mirror is unreadable:
 const FALLBACK_HEALTH=[
  {id:'sheet-cleanup-1am',label:'sheet-cleanup-1am',due:'1:00 AM',kind:'sched',maxGapH:26},
@@ -1979,8 +1982,7 @@ const FALLBACK_HEALTH=[
  {id:'buyer-sweep',label:'buyer-sweep',due:'6:00 PM',dueH:18,kind:'daily'},
  {id:'seller-sweep',label:'seller-sweep',due:'7:00 PM',dueH:19,kind:'daily'},
  {id:'mobile-snapshot',label:'nightly-mobile-snapshot-22-00',due:'10:00 PM',dueH:22,kind:'daily'},
- {id:'github-backup-nightly',label:'github-backup-nightly',due:'11:00 PM',kind:'sched',maxGapH:26},
- DIGESTS_ROW
+ {id:'github-backup-nightly',label:'github-backup-nightly',due:'11:00 PM',kind:'sched',maxGapH:26}
 ];
 function fmtH(h){const hh=Math.floor(h),mm=Math.round((h-hh)*60);const h12=((hh+11)%12)+1;return h12+':'+String(mm).padStart(2,'0')+' '+(hh>=12?'PM':'AM');}
 function cronParse(ce){
@@ -2013,7 +2015,6 @@ function buildSkills(rows){
   }
  }
  out.sort((a,b)=>a.id.localeCompare(b.id));
- out.push(DIGESTS_ROW);
  return {skills:out,mirror:mirror};
 }
 function pill(kind,txt){const sty={g:['#e1f5ee','#085041'],a:['#faeeda','#854f0b'],r:['#fcebeb','#791f1f'],n:['#f1efe8','#5f5e5a']}[kind];const p=el('span','statpill',txt);p.style.background=sty[0];p.style.color=sty[1];return p;}
