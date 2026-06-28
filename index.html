@@ -290,7 +290,7 @@ if('serviceWorker' in navigator){
    context (Memory/cold-start-triggers.md). Every workshop copy-to-Claude
    trigger therefore carries WS_BOOT, and each lifecycle stage has exactly ONE
    builder -- never inline a prompt literal on a button (inline literals are how
-   the text drifted from the 5×3 gate / auto-bridge / Phase D in the first place). */
+   the text drifted from the 6×3 gate / auto-bridge / Phase D in the first place). */
 const FH_DIR='/Users/rebeccahimelfarb/Forest Hill YV Dropbox/Rebecca Himelfarb/Personal Files/Files (Rebecca Himelfarb)/Claude/';
 const WS_BOOT='Connect these folders first: '+FH_DIR+'FIX CLAUDE, '+FH_DIR+'Memory, and /Users/rebeccahimelfarb/.forest-hill (Supabase credentials). Read Memory/skill-workshop-ritual.md before acting. '+'Concurrency: before EDITING any skill source (or running the W10 bless or deploy), take the keyed lock so parallel sessions do not clobber — run: node "'+FH_DIR+'FIX CLAUDE/workshop-lock.js" acquire skill:<name> (granted:false or a non-zero exit means another session holds it — STOP and pick a different ticket); use shared keys w10-bless before the bless and deploy before deploying; release each when done. See Memory/skill-workshop-ritual.md. ';
 const FU_BOOT='Connect these folders first: '+FH_DIR+'FIX CLAUDE, '+FH_DIR+'Memory, and /Users/rebeccahimelfarb/.forest-hill (Supabase credentials). Read Memory/work-followups.md before acting. ';
@@ -320,37 +320,37 @@ function wsPromptSkillBatch(skill,rows){
  // adfba798: batch starts work on N tickets -> claim them ALL up front (full ids; bullets show only 8-char prefixes) so the board shows them In progress the minute the batch begins
  var ids=(rows||[]).map(function(r){return String(r.id||'');}).filter(Boolean);
  // d930c249: claim FIRST, ahead of WS_BOOT, via the self-contained wsClaimMany (so the board moves at second 1, before the mounts/ritual read).
- return wsClaimMany(ids)+WS_BOOT+'Work ALL '+((rows||[]).length)+' open workshop tickets for the skill "'+skill+'" as ONE batch.\n'+list+'\nFix them together in a single pass — one set of source edits to '+skill+', one W10 gate run, one deploy that covers the batch. Keep each ticket\'s own row; log a full 5×3 review per ticket BEFORE deploy (one independent cold-subagent review pass can cover the whole batch); the DB deploy gate blocks any ticket reaching deployed without its 5×3. Follow Memory/skill-workshop-ritual.md (review-then-deploy).';
+ return wsClaimMany(ids)+WS_BOOT+'Work ALL '+((rows||[]).length)+' open workshop tickets for the skill "'+skill+'" as ONE batch.\n'+list+'\nFix them together in a single pass — one set of source edits to '+skill+', one W10 gate run, one deploy that covers the batch. Keep each ticket\'s own row; log a full 6×3 review per ticket BEFORE deploy (one independent cold-subagent review pass can cover the whole batch); the DB deploy gate blocks any ticket reaching deployed without its 6×3. Follow Memory/skill-workshop-ritual.md (review-then-deploy).';
 }
 // a3fac04a: AD-HOC, broker-picked multi-select batch (the manual counterpart to wsPromptSkillBatch's
 // automatic skill-grouping). The selected tickets were HAND-picked on the To review tab and may NOT
 // share a skill, so the wording groups fixes by shared skill/root-cause where it applies and keeps the
-// per-ticket ritual + per-ticket 5×3 otherwise. Claim-stage builder: leads with the claim, then WS_BOOT.
+// per-ticket ritual + per-ticket 6×3 otherwise. Claim-stage builder: leads with the claim, then WS_BOOT.
 function wsPromptBatch(rows){
  var arr=(rows||[]).filter(Boolean);
  var list=arr.map(function(r){return '• '+String(r.id||'').slice(0,8)+' ['+(r.status||'')+'] '+String(r.title||'').replace(/"/g,'');}).join('\n');
  var ids=arr.map(function(r){return String(r.id||'');}).filter(Boolean);
- return wsClaimMany(ids)+WS_BOOT+'Workshop these '+arr.length+' tickets I picked to workshop together on the To review tab, as ONE batch:\n'+list+'\nWork them in a single session. They were hand-picked and may NOT share a skill: where any of them DO share a skill or root cause, fix those together (one set of source edits, one W10 gate run, one deploy that covers them); tickets that are unrelated each get their own fix. Keep each ticket\'s own skill_issues row and run the full workshop ritual per ticket — five lenses → fix → prevention → a full 5×3 review BEFORE deploy (one independent cold-subagent review pass may cover the whole batch); the DB deploy gate blocks any ticket reaching deployed without its own 5×3 + prevention. Follow Memory/skill-workshop-ritual.md (review-then-deploy).';
+ return wsClaimMany(ids)+WS_BOOT+'Workshop these '+arr.length+' tickets I picked to workshop together on the To review tab, as ONE batch:\n'+list+'\nWork them in a single session. They were hand-picked and may NOT share a skill: where any of them DO share a skill or root cause, fix those together (one set of source edits, one W10 gate run, one deploy that covers them); tickets that are unrelated each get their own fix. Keep each ticket\'s own skill_issues row and run the full workshop ritual per ticket — the six lenses → fix → prevention → a full 6×3 review BEFORE deploy (one independent cold-subagent review pass may cover the whole batch); the DB deploy gate blocks any ticket reaching deployed without its own 6×3 + prevention. Follow Memory/skill-workshop-ritual.md (review-then-deploy).';
 }
-const WS_ROUNDS='Log each lens’s round in review_log as a structured entry {lens, round, reviewer, independent, at} (lenses: ai_swe, ml, db, version_control, devops); use cold subagents for at least one independent round per lens, with at least 2 distinct reviewers overall. Never hand-set review_rounds — it is derived from the weakest lens. The FULL 5×3 must be complete BEFORE deploy — review-then-deploy is mandatory (issue 291d8d01) and the DB deploy gate (trg_skill_issues_deploy_gate) blocks the transition into deployed until all 15 passes + prevention are logged.';
-const WS_APPLY='I approved its runner-proposed fix (review_state=approved). Apply it ONLY via the Phase D attended-apply path — FIX CLAUDE/apply/attended-apply.js: apply_load_proposal → apply_open (audit-first) → write the change → secret-scan → issue-id-tagged commit → apply_mark_applied → apply_begin_gate → run the W10 gate → apply_record_gate bound to THIS diff. The runner never applies — you do, attended. A deploy-class change needs my typed CONFIRM even after approval. On CLEAN the issue advances to fix_staged (Verifying) — do NOT deploy yet; on FAILED revert per the apply ledger. Complete the FULL 5×3 BEFORE any deploy (the DB deploy gate enforces it). '+WS_ROUNDS;
+const WS_ROUNDS='Run the 6×3 review (canonical: FIX CLAUDE/regression/WORKSHOP-REVIEW-MODEL.md): SIX independent lenses × THREE adversarial rounds, with the FIXER a SEPARATE agent from the reviewers (no agent ever reviews its own fix). The six lenses: ai_swe (logic, edge cases, data-loss, ordering), domain/correctness (does the fix solve the REPORTED problem; broker/client impact; no out-of-scope behaviour change — replaces the old ml lens), db (schema, NOT-NULL, predicates, migrations, read-vs-write), version_control (minimal + reversible edit, the W10 twin/pins, does SOURCE match what RUNS), devops (scheduling, per-row isolation, observability, deploy class), and execution-reality (the 6th — it RUNS verification, it does not just read: node regress.js check, tree/runtime resolution, data-plane dry-runs, DB-migration verify — returns reviewed==runs). Log each round in review_log as {lens, round, reviewer, independent, at}; at least 1 independent cold-subagent round per lens and at least 2 distinct reviewers overall. Never hand-set review_rounds — it is derived from the weakest lens. Give each round its OWN distinct at-timestamp (the gate needs at least 3 distinct timestamps per lens) and write independent as a JSON boolean true, never the string. ROLLOUT GATE-COMPAT — the 6×3 DB gate is still shadow, so the live deploy/close gate enforces the legacy keys: log the domain/correctness lens under the lens key ml (it IS the ml replacement) and execution-reality under the lens key execution_reality — this satisfies trg_skill_issues_deploy_gate / 291d8d01 (ai_swe, ml, db, version_control, devops × 3) AND records the full 6×3. STOP RULE: at the END of the 3-round cycle, if anything bigger than a nit (medium+) remains — including the execution lens finding reviewed≠runs — STOP and ASK THE BROKER how to proceed; do NOT auto-pass and do NOT loop forever (nits are documented as accepted residuals). The full 6×3 must be complete BEFORE deploy — review-then-deploy is mandatory (issue 291d8d01) and the DB deploy gate (trg_skill_issues_deploy_gate) blocks the transition into deployed until all rounds + prevention are logged.';
+const WS_APPLY='I approved its runner-proposed fix (review_state=approved). Apply it ONLY via the Phase D attended-apply path — FIX CLAUDE/apply/attended-apply.js: apply_load_proposal → apply_open (audit-first) → write the change → secret-scan → issue-id-tagged commit → apply_mark_applied → apply_begin_gate → run the W10 gate → apply_record_gate bound to THIS diff. The runner never applies — you do, attended. A deploy-class change needs my typed CONFIRM even after approval. On CLEAN the issue advances to fix_staged (Verifying) — do NOT deploy yet; on FAILED revert per the apply ledger. Complete the FULL 6×3 BEFORE any deploy (the DB deploy gate enforces it). '+WS_ROUNDS;
 function wsPromptFlag(p){
- return WS_BOOT+'Handle workshop flag pending_followups id '+p.id+' (kind "'+(p.kind||'')+'" from '+(p.source_skill||'unknown')+'). Do NOT hand-insert a skill_issues row: run dash_run_bridge() and find the promoted ticket by this flag’s bridge signature (links->>\'bridge_signature\'); if a matching non-closed ticket already exists (the dedup index covers every status except closed), work that one instead. Only if the bridge cannot promote it, insert the skill_issues row yourself AND stamp links.bridge_signature with the bridge’s frozen formula so future recurrences bump “seen again” instead of duplicating. Then run the full workshop ritual on the ticket (five lenses → fix → prevention → 5×3 review). Payload preview: '+String(p.payload||'').slice(0,300);
+ return WS_BOOT+'Handle workshop flag pending_followups id '+p.id+' (kind "'+(p.kind||'')+'" from '+(p.source_skill||'unknown')+'). Do NOT hand-insert a skill_issues row: run dash_run_bridge() and find the promoted ticket by this flag’s bridge signature (links->>\'bridge_signature\'); if a matching non-closed ticket already exists (the dedup index covers every status except closed), work that one instead. Only if the bridge cannot promote it, insert the skill_issues row yourself AND stamp links.bridge_signature with the bridge’s frozen formula so future recurrences bump “seen again” instead of duplicating. Then run the full workshop ritual on the ticket (the six lenses → fix → prevention → 6×3 review). Payload preview: '+String(p.payload||'').slice(0,300);
 }
 function wsPromptReviewRound(row,n){
- return WS_BOOT+'Run five-lens review round '+n+' on the work done for skill issue "'+(row.title||'').replace(/"/g,'')+'" (skill_issues id '+row.id+') — the lenses review the fix and the prevention, not the original bug. Fix and add prevention for anything the review finds. '+WS_ROUNDS;
+ return WS_BOOT+'Run six-lens review round '+n+' on the work done for skill issue "'+(row.title||'').replace(/"/g,'')+'" (skill_issues id '+row.id+') — the lenses review the fix and the prevention, not the original bug. Fix and add prevention for anything the review finds. '+WS_ROUNDS;
 }
 function wsPromptVerify(row){
- return WS_BOOT+'Verify-and-close workshop issue '+row.id+' ("'+(row.title||'').replace(/"/g,'')+'") from the Verifying tab. The fix is applied; confirm a clean run (no re-trigger of the same flag/signature) as the evidence; the 5×3 must ALREADY be complete (it was required before deploy) — if any round is missing that is a process violation: complete it and note why — '+WS_ROUNDS+' — then close: the DB close gate requires prevention + the 5×3 + evidence (a passed clean-run check or my Confirm-working attestation).';
+ return WS_BOOT+'Verify-and-close workshop issue '+row.id+' ("'+(row.title||'').replace(/"/g,'')+'") from the Verifying tab. The fix is applied; confirm a clean run (no re-trigger of the same flag/signature) as the evidence; the 6×3 must ALREADY be complete (it was required before deploy) — if any round is missing that is a process violation: complete it and note why — '+WS_ROUNDS+' — then close: the DB close gate requires prevention + the 6×3 + evidence (a passed clean-run check or my Confirm-working attestation).';
 }
 function wsPromptInProgress(row){
  const base=WS_BOOT+'Continue working workshop issue '+row.id+' ("'+(row.title||'').replace(/"/g,'')+'") from the In progress tab. ';
  const prop=(row.runner_proposal&&typeof row.runner_proposal==='object')?row.runner_proposal:null;
  if(prop&&prop.proposed_change!=null&&row.review_state==='approved') return base+WS_APPLY;
- return base+'Build the fix through the release machinery (source edit → version bump → stage), run the W10 gate bound to this diff, and advance to fix_staged — do NOT deploy yet. Complete the FULL 5×3 review BEFORE deploying; the DB deploy gate blocks the transition into deployed until it is. Only after the 5×3 is logged: deploy (deploy-from-source + relaunch / migration / fh-boards push) → verify → close. '+WS_ROUNDS;
+ return base+'Build the fix through the release machinery (source edit → version bump → stage), run the W10 gate bound to this diff, and advance to fix_staged — do NOT deploy yet. Complete the FULL 6×3 review BEFORE deploying; the DB deploy gate blocks the transition into deployed until it is. Only after the 6×3 is logged: deploy (deploy-from-source + relaunch / migration / fh-boards push) → verify → close. '+WS_ROUNDS;
 }
 function wsPromptEvidencePassed(row,n){
- return WS_BOOT+'All '+n+' close-evidence checks for skill issue "'+(row.title||'').replace(/"/g,'')+'" (skill_issues id '+row.id+') show passed in issue_evidence_checks. Re-verify the evidence rows yourself, then set status=closed (the DB close gate enforces prevention + the 5×3 structured review) and append an evidence_verified entry to review_log. '+WS_ROUNDS;
+ return WS_BOOT+'All '+n+' close-evidence checks for skill issue "'+(row.title||'').replace(/"/g,'')+'" (skill_issues id '+row.id+') show passed in issue_evidence_checks. Re-verify the evidence rows yourself, then set status=closed (the DB close gate enforces prevention + the 6×3 structured review) and append an evidence_verified entry to review_log. '+WS_ROUNDS;
 }
 function wsPromptEvidenceFailed(row){
  return WS_BOOT+'A close-evidence check failed for skill issue "'+(row.title||'').replace(/"/g,'')+'" (skill_issues id '+row.id+'). Read its issue_evidence_checks rows + any sys_evidence_check_failed followups, work out whether the fix needs more work or the check needs correcting, and proceed per the workshop ritual.';
@@ -879,7 +879,7 @@ const WS_STAGES=[
  ['flags','Flags','Raw incoming system flags filed by skills, before they become tickets. The bridge promotes them to To review automatically every 2 hours — or tap “Run bridge now”.'],
  ['toreview','To review','Open tickets to triage. Dismiss with a reason or work it in Claude; approve a proposed fix only when one has been authored.'],
  ['inprogress','In progress','A session is actively working or applying the fix.'],
- ['verifying','Verifying','Fix applied and the 5×3 review done — awaiting evidence. Tap “Confirm working”, or let a clean run prove it, to close.'],
+ ['verifying','Verifying','Fix applied and the 6×3 review done — awaiting evidence. Tap “Confirm working”, or let a clean run prove it, to close.'],
  ['closed','Closed','Done: reviewed, evidenced, and prevented from recurring.'],
  ['dismissed','Dismissed','Looked at and set aside — each with a recorded reason.']
 ];
@@ -1075,14 +1075,14 @@ function wsCard(row,bucket){
   acts.appendChild(db);
  }
  if(bucket==='verifying'){
-  // one-tap manual evidence attestation -> Verifying closes (gate still enforces prevention + 5×3)
+  // one-tap manual evidence attestation -> Verifying closes (gate still enforces prevention + 6×3)
   const cb=el('button','res-btn','✓ Confirm working');
   const msg=el('div','mutedtxt','');
   cb.onclick=async()=>{
    if(!UUID.test(row.id)) return;
    cb.disabled=true;cb.textContent='Confirming…';
    try{
-    // atomic close: returns true on close, or throws the gate's own message if the 5×3 isn't done yet
+    // atomic close: returns true on close, or throws the gate's own message if the 6×3 isn't done yet
     await rpc('dash_confirm_working',{p_id:row.id});
     loadWorkshop();
    }catch(e){ cb.disabled=false; cb.textContent='✓ Confirm working'; msg.textContent='Could not close yet: '+e.message; }
@@ -1107,7 +1107,7 @@ function wsCard(row,bucket){
  }else if(bucket==='inprogress'){
   const hb=el('button','res-btn','Work in Claude');
   // bf7eea06: a CLAIMED-open ticket (status still 'open') hasn't been workshopped yet — it needs the full
-  // ritual from the five lenses, so hand it the To-review prompt; a workshopped+ ticket gets the continue prompt.
+  // ritual from the six lenses, so hand it the To-review prompt; a workshopped+ ticket gets the continue prompt.
   hb.onclick=()=>copyPrompt(row.status==='open'?rvClaudePrompt(row):wsPromptInProgress(row),hb);
   acts.appendChild(hb);
  }
@@ -1146,7 +1146,7 @@ function wsFlagCard(p){
 function renderWorkshop(rows,flags){
  const main=document.getElementById('v-workshop');
  main.textContent='';
- main.appendChild(el('p','sub','Skill bugs and issues, workshopped through the five lenses until each one is fixed AND prevented from recurring. Logged in the database; permanent.'));
+ main.appendChild(el('p','sub','Skill bugs and issues, workshopped through the six lenses until each one is fixed AND prevented from recurring. Logged in the database; permanent.'));
  const addBtn=el('button','linkish','＋ Flag an issue');
  const bridgeBtn=el('button','linkish','↻ Run bridge now');
  const bridgeMsg=el('span','mutedtxt','');
@@ -1279,7 +1279,7 @@ function renderWorkshop(rows,flags){
   }else{
    for(const r of cur) body.appendChild(wsCard(r,active));
   }
-  body.appendChild(el('p','sub','Source: skill_issues + the system-flag bridge (live). Flags auto-promote to To review every 2h. Close needs prevention + the 5×3 review + evidence (a clean run, or your Confirm-working tap). Buttons copy ready-made requests for Claude.'));
+  body.appendChild(el('p','sub','Source: skill_issues + the system-flag bridge (live). Flags auto-promote to To review every 2h. Close needs prevention + the 6×3 review + evidence (a clean run, or your Confirm-working tap). Buttons copy ready-made requests for Claude.'));
  }
 
  si.oninput=()=>{ WS_SEARCH=si.value; paintBody(); };
@@ -1346,7 +1346,7 @@ function rvClaudePrompt(row){
  const hasProp=!!(prop&&prop.proposed_change!=null);
  if(hasProp&&row.review_state==='approved') return base+WS_APPLY;
  if(hasProp) return base+'Read its skill_issues row (title, runner_proposal: disposition / classification_reason / proposed_change / self_review) and review the proposal with me — I approve, reject, or dismiss on the board, not you. If it is deploy-class, approving intentionally silences those alerts — confirm that with me explicitly. After my approval the fix is applied ONLY via the Phase D attended-apply path, in an attended session. '+WS_ROUNDS;
- return base+'It has NO runner proposal, so Approve/Reject do not apply. Run the workshop ritual on it with me: five lenses (record root_cause + each lens take on the row, set status=workshopped), then author the fix through the release machinery and record prevention. '+WS_ROUNDS;
+ return base+'It has NO runner proposal, so Approve/Reject do not apply. Run the workshop ritual on it with me: six lenses (record root_cause + each lens take on the row, set status=workshopped), then author the fix through the release machinery and record prevention. '+WS_ROUNDS;
 }
 function reviewCard(row,bucket){
  const c=el('div','item');
@@ -1489,7 +1489,7 @@ function activityCanon(s){
 //   - no-year slash "6/5" -> DELIBERATELY NOT STRIPPED: indistinguishable from a fraction/score/ratio
 //     (1/2 bath, 3/4 acre, 8/10, 28/30, 24/7) — stripping it would eat genuine content and risk the
 //     permanent-hide direction. Leaving it un-stripped means a pipeline re-stamp into "6/5" merely flips the
-//     fp -> a spurious REAPPEAR, the broker-preferred SAFE direction (5x3 cold-review round 3, both reviewers).
+//     fp -> a spurious REAPPEAR, the broker-preferred SAFE direction (6×3 cold-review round 3, both reviewers).
 //   - bare day-first "5 Jun" (no year) -> DELIBERATELY NOT STRIPPED for the same ambiguity ("5 march madness").
 // Same review also fixed the PRE-EXISTING greedy [a-z]* on the Mon-D branch (was eating "declined 3"/"marched 5").
 // All changes keep fp at v2 ("2:") (a v3 bump would force-reappear EVERY suppression; this disturbs only rows
